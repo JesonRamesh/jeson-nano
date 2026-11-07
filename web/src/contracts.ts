@@ -7,7 +7,9 @@
 // Conventions: metres, z up, x east, y north, radians CCW from +x unless `_deg`.
 // Belief cells (map_delta) are 0.2 m: i = column (x), j = row from the bottom (y).
 
-export const CONTRACT_VERSION = 1
+export const CONTRACT_VERSION = 2
+// v2: Scenario.checkpoints, Checkpoint.node. (SwarmState.relook_requests is Python-only:
+// SwarmState never crosses the WebSocket, so it has no mirror here.)
 
 // ---- literals -----------------------------------------------------------
 
@@ -169,6 +171,9 @@ export interface Scenario {
   flare: Flare | null
   heat: Heat
   beats: Beats
+  /** v2. Authored by W in the route editor: expected chain positions (editor overlay, tests).
+   *  The last one sits on the survivor — never show these on the dashboard. */
+  checkpoints: Checkpoint[]
 }
 
 export interface Transform {
@@ -223,6 +228,7 @@ export interface Checkpoint {
   x: number
   y: number
   drone: string | null
+  node: string | null // v2: route-graph node id, when the checkpoint sits on a node
 }
 
 export interface SurvivorState {
