@@ -85,6 +85,11 @@ def _drone(name: str, rgba) -> str:
             f'<geom name="{name}_leg{i}" type="capsule" fromto="{x * 0.5} {y * 0.5} -0.02 {x * 0.55} {y * 0.55} -0.075" '
             f'size="0.006" rgba="{dark}" {vis}/>',
         ]
+    if shapes.drone_model_parts():  # W's model, the same one the 3D view draws
+        # Keep the primitive parts as invisible inertia (group 3, same masses) so drone physics is
+        # unchanged; the model is visual only (zero mass).
+        parts = [x.replace('group="2"', 'group="3"') for x in parts] + [shapes.drone_model_geoms(name, rgba)]
+    cam_x = max(CAM_FORWARD, shapes.drone_model_front() + 0.02) if shapes.drone_model_parts() else CAM_FORWARD
     lo, hi = DRONE_Z_RANGE
     return f"""<body name="{name}" gravcomp="1">
 <joint name="{name}_x" type="slide" axis="1 0 0"/>
@@ -93,7 +98,7 @@ def _drone(name: str, rgba) -> str:
 <joint name="{name}_yaw" type="hinge" axis="0 0 1"/>
 <geom name="{name}_body" type="sphere" size="{r}" mass="{DRONE_MASS}" rgba="{c}" group="3" contype="2" conaffinity="1"/>
 {chr(10).join(parts)}
-<camera name="{name}_cam" pos="{CAM_FORWARD} 0 0" fovy="{shapes.CAM_FOVY_DEG}" xyaxes="{shapes.camera_xyaxes(0.0)}"/>
+<camera name="{name}_cam" pos="{cam_x:.3f} 0 0" fovy="{shapes.CAM_FOVY_DEG}" xyaxes="{shapes.camera_xyaxes(0.0)}"/>
 </body>"""
 
 

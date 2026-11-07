@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 # OpenCV HSV: H in 0..179, S and V in 0..255
-FIRE_H = (0, 33)
+FIRE_H = (4, 33)  # flames start at red-orange (H ~7); pure red (the drone model's rear nav light, H 0) is not fire
 FIRE_S_MIN = 150
 FIRE_V_MIN = 240  # fire cones are emissive (V = 255); orange textures in the real scan replica are V 200-232
 PERSON_H = (33, 42)  # hi-vis survivor H 35-38; a green-yellow texture in the scan replica is H 45-49

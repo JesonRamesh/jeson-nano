@@ -10,8 +10,12 @@ visuals, 2 = drones + firefighter, 3 = hidden.
 
 from __future__ import annotations
 
+import functools
 import math
 import os
+from pathlib import Path
+
+import numpy as np
 
 from sgr import config
 
@@ -82,11 +86,75 @@ _FIRE_LAYOUT = (
 )
 
 
+# W's quadcopter model, shared with the dashboard's 3D view (which draws it at DRONE_SCALE = 1.25).
+DRONE_MODEL = Path(__file__).resolve().parents[2] / "web" / "src" / "scene3d" / "dressing" / "drone.glb"
+DRONE_MODEL_SCALE = 1.25
+_DRONE_EMISSION_MATS = {0.6: "mat_dm_e60", 1.0: "mat_dm_e100"}
+
+
+@functools.lru_cache(maxsize=1)
+def drone_model_parts() -> tuple:
+    """((part, vertices z-up m, faces, rgba, emission, material_name), ...) from drone.glb; () if unavailable.
+
+    glTF is y-up with +x forward; the sim is z-up: (x, y, z) -> (x, -z, y), the same +90 deg X turn the
+    3D view applies.
+    """
+    if not DRONE_MODEL.is_file():
+        return ()
+    try:
+        import trimesh
+
+        scene = trimesh.load(DRONE_MODEL)
+        parts = []
+        for node in sorted(scene.graph.nodes_geometry):
+            T, gname = scene.graph[node]
+            g = scene.geometry[gname]
+            v = trimesh.transformations.transform_points(np.asarray(g.vertices, float), T)
+            v = np.stack([v[:, 0], -v[:, 2], v[:, 1]], axis=1) * DRONE_MODEL_SCALE
+            mat = g.visual.material
+            col = np.asarray(getattr(mat, "baseColorFactor", (128, 128, 128, 255)), float)
+            col = col / 255.0 if col.max() > 1.0 else col
+            em = getattr(mat, "emissiveFactor", None)
+            emission = 0.0 if em is None else (1.0 if max(em) > 0.8 else 0.6 if max(em) > 0.1 else 0.0)
+            parts.append((node, v, np.asarray(g.faces, int), tuple(float(c) for c in col), emission,
+                          str(getattr(mat, "name", ""))))
+        return tuple(parts)
+    except Exception:
+        return ()
+
+
+def drone_model_front() -> float:
+    """Forward extent of the model (m): the drone camera sits just ahead of it."""
+    parts = drone_model_parts()
+    return max(float(p[1][:, 0].max()) for p in parts) if parts else 0.25
+
+
+def _drone_mesh_assets() -> list[str]:
+    out = [f'<material name="{m}" emission="{e}" specular="0" shininess="0"/>' for e, m in _DRONE_EMISSION_MATS.items()]
+    for node, v, f, *_ in drone_model_parts():
+        vs = " ".join(f"{x:.4f}" for x in v.ravel())
+        fs = " ".join(str(i) for i in f.ravel())
+        out.append(f'<mesh name="dm_{node}" vertex="{vs}" face="{fs}" inertia="shell"/>')
+    return out
+
+
+def drone_model_geoms(name: str, colour) -> str:
+    """Geoms of one drone from the shared model (visual only, group 2). The accent part gets `colour`."""
+    out = []
+    for node, _v, _f, col, emission, mat in drone_model_parts():
+        c = colour if mat == "accent" else col
+        material = _DRONE_EMISSION_MATS.get(emission, "mat_matte")
+        out.append(f'<geom name="{name}_m_{node}" type="mesh" mesh="dm_{node}" rgba="{rgba(c)}" material="{material}" '
+                   f'group="2" contype="0" conaffinity="0" mass="0"/>')
+    return chr(10).join(out)
+
+
 def assets() -> str:
     """<asset> children needed by the snippets below."""
     out = [f'<mesh name="{n}" vertex="{_cone_vertices(r, h)}"/>' for n, r, h in _CONES]
     out.append(f'<material name="mat_fire" emission="{FIRE_EMISSION}" specular="0" shininess="0"/>')
     out.append('<material name="mat_matte" specular="0" shininess="0" reflectance="0"/>')
+    out.extend(_drone_mesh_assets())
     out.append(f'<material name="mat_decoy" emission="{DECOY_EMISSION}" specular="0" shininess="0" reflectance="0"/>')
     return "\n".join(out)
 
