@@ -1,4 +1,6 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
+import { Scene3D } from '../scene3d/Scene3D'
+import { Toasts } from '../ui/Toasts'
 import { useSocket } from '../net/useSocket'
 import { sim, useSim } from '../state/store'
 import { BeliefMap } from './BeliefMap'
@@ -13,7 +15,8 @@ const TEMP_LIMIT_C = 70 // §7.4 retreat threshold
 /** Act 1 layout (§10.1), 1920×1080. */
 export default function Dashboard() {
   const panels = useRef<(DronePanelHandle | null)[]>([])
-  const { status, versionMismatch } = useSocket({
+  const [big3d, setBig3d] = useState(false)
+  const { status, versionMismatch, send } = useSocket({
     onMessage: (msg) => sim.handle(msg),
     onFrame: (f) => panels.current[f.channel - 1]?.showFrame(f.jpeg, f.seq),
   })
@@ -24,6 +27,7 @@ export default function Dashboard() {
 
   return (
     <div className="dash">
+      <Toasts />
       <header className="topbar">
         <strong>Swarm-Guided Rescue</strong>
         <span className={`conn conn-${status}`}>● {status}</span>
@@ -36,7 +40,16 @@ export default function Dashboard() {
       </header>
       <main className="act1">
         <section className="map-area">
-          <BeliefMap />
+          {/* 2D belief map and 3D view share this area; the swap button picks the big one (§10.1). */}
+          <div className={`pane ${big3d ? 'small' : 'big'}`} style={{ order: big3d ? 2 : 1 }}>
+            <BeliefMap send={send} />
+          </div>
+          <div className={`pane ${big3d ? 'big' : 'small'}`} style={{ order: big3d ? 1 : 2 }}>
+            <Scene3D />
+          </div>
+          <button className="swap-btn" onClick={() => setBig3d(!big3d)}>
+            ⇄ {big3d ? 'bigger map' : 'bigger 3D'}
+          </button>
         </section>
         <section className="drones">
           {drones.map((d, i) => (

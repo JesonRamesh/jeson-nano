@@ -6,10 +6,20 @@ export interface MapView {
   oy: number // canvas y of world y = 0 (canvas y grows downward)
 }
 
-export function fitView(worldW: number, worldH: number, canvasW: number, canvasH: number, pad = 12): MapView {
-  const scale = Math.max(0.01, Math.min((canvasW - 2 * pad) / worldW, (canvasH - 2 * pad) / worldH))
+/** Fit the map into the canvas, leaving `padTop` / `padBottom` px for toolbars. */
+export function fitView(
+  worldW: number,
+  worldH: number,
+  canvasW: number,
+  canvasH: number,
+  pad = 12,
+  padTop = pad,
+  padBottom = pad,
+): MapView {
+  const availH = canvasH - padTop - padBottom
+  const scale = Math.max(0.01, Math.min((canvasW - 2 * pad) / worldW, availH / worldH))
   const ox = (canvasW - worldW * scale) / 2
-  const oy = (canvasH + worldH * scale) / 2
+  const oy = padTop + (availH + worldH * scale) / 2
   return { scale, ox, oy }
 }
 

@@ -63,11 +63,12 @@ def nearest_wall_normal(free: np.ndarray, x: float, y: float, res: float, origin
     """
     h, w = free.shape
     best = None
+    r0, c0 = world_to_cell(x, y, h, res, origin)
+    steps = int(round(max_m / res))
     for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-        steps = int(max_m / res)
-        for k in range(1, steps):
-            px, py = x + dx * k * res, y + dy * k * res
-            r, c = world_to_cell(px, py, h, res, origin)
+        # step whole cells: stepping in metres (x + k*res) skips cells to float error
+        for k in range(1, steps + 1):
+            r, c = r0 - dy * k, c0 + dx * k  # rows are flipped: +y = smaller row index
             if not (0 <= r < h and 0 <= c < w) or not free[r, c]:
                 # wall face = boundary of this cell facing the start point
                 if dx:

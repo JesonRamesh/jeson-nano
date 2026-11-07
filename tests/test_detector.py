@@ -70,6 +70,13 @@ def test_detects_out_to_coverage_range(studio, label, ty, dist):
     assert len(boxes) == 1  # one object -> one box (parts are joined)
 
 
+def test_decoy_flagged_at_grazing_angle(studio):
+    """A drone flying past sees the wall panel side-on; it must still pass the fire threshold."""
+    studio.teleport_drone("D4", 14.6, 3.0, math.pi / 2)  # flying north, panel on the right wall
+    boxes = detect(studio.render_drone("D4")[0])
+    assert [b.label for b in boxes] == ["fire"] and 0.45 <= boxes[0].score_fast < 0.7
+
+
 def test_empty_wall_has_no_detections(studio):
     studio.teleport_drone("D4", 9.0, 9.8, math.pi / 2)  # 0.7 m from the north wall
     img, _ = studio.render_drone("D4")
