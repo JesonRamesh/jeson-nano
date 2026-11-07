@@ -13,6 +13,11 @@ Places debris the way sgr.world does (ceil(edge.width / 1 m) 1x1 m blocks across
   * decoy: distance to the nearest wall (must be <= 3 m),
   * flare target / time present.
 Writes an optional PNG with both routes. Exit code 1 if a hard requirement fails.
+
+--act1 also runs Act 1 headless (real World + mock perception + real Swarm, like the smoke
+test, ~10 s): key trace actions with their first time, the flare target's temperature
+before the flare, where it is at flare.t, and whether the survivor is still reachable with
+the flare-up fire placed there (that fire lands ON the drone, wherever it happens to be).
 """
 from __future__ import annotations
 
@@ -34,6 +39,31 @@ from sgr.world.heat import temperature_at  # noqa: E402
 DEBRIS = 1.0
 
 
+def run_act1(map_dir: Path, sd: dict, ticks: int = 1500, flare: bool = True):
+    """Headless Act 1. Returns (loop, samples) with samples[t] = {drone: (x, y, temp_c)} every 1 s."""
+    from sgr.contracts import PriorMap, Scenario
+    from sgr.guidance import Guidance
+    from sgr.loop import SimLoop
+    from sgr.perception import Perception
+    from sgr.swarm import Swarm
+    from sgr.world import World
+    sd = dict(sd)
+    if not flare:
+        sd["flare"] = None
+    sc = Scenario.model_validate(sd)
+    w = World(map_dir, sc)
+    loop = SimLoop(w, Perception(mode="mock", ground_truth=w.ground_truth, line_of_sight=w.line_of_sight),
+                   Swarm(PriorMap.from_map(map_dir, sc), list(sc.drones.ids)), sc, guidance=Guidance(),
+                   bus=None, render=False, realtime=False)
+    samples = {}
+    for k in range(ticks):
+        loop.tick()
+        if k % 10 == 9:
+            samples[round(loop.t)] = {d: (w.drone_pose(d).x, w.drone_pose(d).y, w.temperature(d))
+                                      for d in sc.drones.ids}
+    return loop, samples
+
+
 def plen(path) -> float:
     return sum(math.dist(a, b) for a, b in zip(path, path[1:])) if path else math.inf
 
@@ -42,6 +72,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("map_dir", type=Path)
     ap.add_argument("--png", type=Path)
+    ap.add_argument("--act1", action="store_true", help="also run Act 1 headless with mock perception (~10 s)")
     a = ap.parse_args()
     sc = json.loads((a.map_dir / "scenario.json").read_text())
     grid = cv2.imread(str(a.map_dir / "grid.png"), cv2.IMREAD_GRAYSCALE)
@@ -152,6 +183,47 @@ def main() -> int:
                 cv2.polylines(img, [np.array([P(*p) for p in route], np.int32)], False, col, th, cv2.LINE_AA)
         cv2.imwrite(str(a.png), img)
         print(f"wrote {a.png} (white = first route, amber = route with everything known)")
+    if a.act1:
+        print("Act 1 (headless, mock perception, 150 s):")
+        loop, smp = run_act1(a.map_dir, sc)
+        first = {}
+        for r in loop.trace:
+            first.setdefault(r.action, (r.t, r.drone, r.reason))
+        for act in ("ASSIGN_AREA", "MARK_BLOCKED", "REPLAN", "CONFIRM_HAZARD", "REJECT_DETECTION", "RETREAT",
+                    "DRONE_LOST", "SURVIVOR_CONFIRMED", "CHAIN_POSITION"):
+            n = sum(r.action == act for r in loop.trace)
+            if act in first:
+                t, d, why = first[act]
+                print(f"  {act:20s} x{n:<4d} first at {t:5.1f} s ({d}: {why[:70]})")
+            else:
+                print(f"  {act:20s} --")
+        others = sorted({r.action for r in loop.trace} - set(first) | (set(first) - {
+            "ASSIGN_AREA", "MARK_BLOCKED", "REPLAN", "CONFIRM_HAZARD", "REJECT_DETECTION", "RETREAT",
+            "DRONE_LOST", "SURVIVOR_CONFIRMED", "CHAIN_POSITION"}))
+        if others:
+            print("  other actions:", ", ".join(others))
+        fl = sc.get("flare")
+        if fl:
+            tgt, tf = fl["target"], fl["t"]
+            pre = [smp[t][tgt] for t in sorted(smp) if tf - 20 <= t < tf]
+            peak = max(p[2] for p in pre) if pre else float("nan")
+            at = smp.get(round(tf)) or smp[min(smp, key=lambda t: abs(t - tf))]
+            print(f"  flare: {tgt} peaks at {peak:.0f} C in the 20 s before t={tf} (retreat at "
+                  f"{sc.get('heat', {}).get('limit_c', 70)} C); at the flare it is at ({at[tgt][0]:.1f}, {at[tgt][1]:.1f})")
+            if loop.flare_fire is not None:
+                ff = {"x": loop.flare_fire.x, "y": loop.flare_fire.y, "size": 1.5}
+                fm = [(((cx - f["x"]) ** 2 + (cy - f["y"]) ** 2) <= (f.get("size", 1.5) / 2) ** 2, FIRE)
+                      for f in sc.get("fires", []) + [ff]]
+                after = plan(fm + [(m, BLOCKED) for _, m, _ in deb])
+                print(f"  survivor route after the flare-up fire at ({ff['x']:.1f}, {ff['y']:.1f}): "
+                      + (f"{plen(after):.1f} m" if after else "NONE  <-- flare fire cuts off the survivor"))
+                if not after:
+                    fails.append("flare-up fire cuts off the survivor")
+            if peak < 60:
+                print("  WARNING: no heat lead-up before the flare (target never gets close to a fire)")
+        for need in ("SURVIVOR_CONFIRMED", "REPLAN", "DRONE_LOST"):
+            if need not in first:
+                fails.append(f"Act 1: no {need}")
     for f in fails:
         print("FAIL:", f)
     return 1 if fails else 0
