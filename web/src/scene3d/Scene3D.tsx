@@ -9,6 +9,7 @@ import { useFreeGrid, type FreeGrid } from '../state/grid'
 import { BELIEF_LEGEND, paintBelief } from '../state/beliefPaint'
 import { sim, useSim, type SimEventMsg } from '../state/store'
 import { DEBRIS_SIZE } from './constants'
+import { Dressing } from './dressing'
 import { mergeWalls } from './walls'
 
 // Everything inside <SimFrame> uses sim coordinates (metres, z up, x east, y north).
@@ -312,13 +313,27 @@ function Debris({ h }: { h: Handle }) {
   )
 }
 
-/** Judge placements (click tool). Re-renders only when the set of handles changes. */
+// W's disaster dressing (<Dressing />) draws flames for click fires and rubble around click
+// debris. ?dressing=off turns it off (perf checks); then our simple cones stand in for fire.
+const DRESSING_OFF = new URLSearchParams(window.location.search).get('dressing') === 'off'
+
+/**
+ * Judge placements (click tool). Debris is always our 2.0 m block, the same size as the
+ * MuJoCo debris the drones see (W's rubble sits around its base). Fire: W's FireFX, or our
+ * cones when the dressing is off. Re-renders only when the set of handles changes.
+ */
 function ClickObjects() {
   const key = useSim((s) => (s.state?.click_handles ?? []).map((h) => h.id).join(','))
   const handles = useMemo(() => sim.snap.state?.click_handles ?? [], [key]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <>
-      {handles.map((h) => (h.kind === 'debris' ? <Debris key={h.id} h={h} /> : <FireCluster key={h.id} x={h.x} y={h.y} />))}
+      {handles.map((h) =>
+        h.kind === 'debris' ? (
+          <Debris key={h.id} h={h} />
+        ) : DRESSING_OFF ? (
+          <FireCluster key={h.id} x={h.x} y={h.y} />
+        ) : null,
+      )}
     </>
   )
 }
@@ -588,6 +603,7 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
           <ClickObjects />
           <SurvivorMarker />
           <Drones />
+          <Dressing />
         </SimFrame>
         <CameraRig mode={mode} />
       </Canvas>
