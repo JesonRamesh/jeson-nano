@@ -68,12 +68,36 @@ function ExtrudedWalls({ grid, ghost = false }: { grid: FreeGrid; ghost?: boolea
   )
 }
 
+// "Dollhouse" cut: drop everything above 2.3 m (ceiling) so the overview sees into the rooms.
+// World space is three.js y-up, so sim z = 2.3 m is y = 2.3. Needs gl.localClippingEnabled.
+const CEILING_CUT = [new THREE.Plane(new THREE.Vector3(0, -1, 0), 2.3)]
+
+/**
+ * The phone scan. The Scaniverse GLB has no normals (POSITION + TEXCOORD_0 only), so lit
+ * materials go flat-shaded and noisy triangles render near black. The photo texture already
+ * has the lighting baked in, so draw it unlit, double-sided, with the ceiling cut away.
+ */
 function ScanModel({ url, transform }: { url: string; transform: Transform }) {
   const { scene } = useGLTF(url)
+  const unlit = useMemo(() => {
+    const copy = scene.clone(true) // shares geometry; only the materials are replaced
+    copy.traverse((o) => {
+      const mesh = o as THREE.Mesh
+      if (!mesh.isMesh) return
+      const old = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.MeshStandardMaterial
+      mesh.material = new THREE.MeshBasicMaterial({
+        map: old.map ?? null,
+        color: old.map ? 0xffffff : (old.color ?? 0xcccccc),
+        side: THREE.DoubleSide,
+        clippingPlanes: CEILING_CUT,
+      })
+    })
+    return copy
+  }, [scene])
   const matrix = useMemo(() => new THREE.Matrix4().set(...(transform.M.flat() as Parameters<THREE.Matrix4['set']>)), [transform])
   return (
     <group matrix={matrix} matrixAutoUpdate={false}>
-      <primitive object={scene} />
+      <primitive object={unlit} />
     </group>
   )
 }
@@ -104,7 +128,7 @@ function Environment() {
       {/* Neutral floor under everything: holes / unscanned parts of the scan read as floor, not black. */}
       <mesh position={[w / 2, h / 2, -0.03]}>
         <planeGeometry args={[w, h]} />
-        <meshStandardMaterial color="#4a4e57" roughness={1} />
+        <meshBasicMaterial color="#77736d" /> {/* unlit like the scan: concrete grey, never black */}
       </mesh>
       {hello.transform ? (
         <>
@@ -544,7 +568,14 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
   return (
     <div className={`scene3d ${clickMode ? 'click-mode' : ''}`}>
       {/* frameloop="demand" + FrameCap: ~30 fps max, so the 3D view leaves GPU time for Gemma. */}
-      <Canvas camera={{ fov: 50, near: 0.1, far: 500, position: [15, 25, 10] }} dpr={[1, 1.5]} frameloop="demand">
+      <Canvas
+        camera={{ fov: 50, near: 0.1, far: 500, position: [15, 25, 10] }}
+        dpr={[1, 1.5]}
+        frameloop="demand"
+        onCreated={({ gl }) => {
+          gl.localClippingEnabled = true // for the scan's ceiling cut
+        }}
+      >
         <FrameCap fps={MAX_FPS} />
         <color attach="background" args={['#0e1014']} />
         <hemisphereLight args={['#c8d2e0', '#202020', 0.9]} />

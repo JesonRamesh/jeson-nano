@@ -313,3 +313,8 @@ h2 {
 .status-inspecting, .status-watching { background: #4d3a12; color: var(--warn); }
 .status-retreat, .status-lost { background: #4d1a1b; color: var(--bad); }
 .status-chain { background: #1e4d33; color: var(--ok); }
+
+/* detection boxes: solid on their own frame (.hold), else fade out over ~1 s */
+.drone-cam .boxes { position: absolute; inset: 0; pointer-events: none; animation: boxes-fade 1.2s ease-in forwards; }
+.drone-cam .boxes.hold { animation: none; opacity: 1; }
+@keyframes boxes-fade { 0%, 40% { opacity: 1; } 100% { opacity: 0; } }
