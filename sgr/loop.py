@@ -47,12 +47,13 @@ class SimLoop:
         scenario: Scenario,
         guidance: Any | None = None,
         bus: Bus | None = None,
+        budget: Any | None = None,
         speed: float = 1.0,
         render: bool = True,
         realtime: bool = True,
     ) -> None:
         self.world, self.perception, self.swarm, self.guidance = world, perception, swarm, guidance
-        self.scenario, self.bus = scenario, bus
+        self.scenario, self.bus, self.budget = scenario, bus, budget
         self.speed, self.render, self.realtime = speed, render, realtime
         self.t = 0.0
         self.ticks = 0
@@ -67,6 +68,7 @@ class SimLoop:
         self._frame_seq = 0
         self._cam_rr = 0
         self._last_state_pub = -math.inf
+        self._last_budget_pub = -math.inf
 
     # ------------------------------------------------------------------
     def run(self, max_ticks: int | None = None) -> None:
@@ -115,11 +117,18 @@ class SimLoop:
         detections = self.perception.poll()
         # 5 swarm
         cmds, rows, self.swarm_state = self.swarm.tick(self.t, readings, detections)
-        # 6 guidance (Act 2)
-        if self.act == 2 and self.guidance is not None:
-            gmsg, gcmds = self.guidance.tick(self.t, w.ff_pose(), self.swarm_state)
-            cmds = {**cmds, **gcmds}
-            self._publish(gmsg)
+        # the swarm asks for a closer look only once a drone is ~2 m in front of the target (§8.4)
+        for det_id in self.swarm_state.relook_requests:
+            self.perception.request_relook(det_id)
+        # 6 guidance: Act 2 steers the firefighter; in Act 1 it only folds in hazards (map_delta)
+        if self.guidance is not None:
+            if self.act == 2:
+                gmsg, gcmds = self.guidance.tick(self.t, w.ff_pose(), self.swarm_state)
+                cmds = {**cmds, **gcmds}
+                self._publish(gmsg)
+            else:
+                self.guidance.observe(self.swarm_state)
+            rows = rows + self.guidance.drain_trace()
         for d, c in cmds.items():
             if d not in self.dead:
                 w.set_drone_cmd(d, c.vx, c.vy, c.vz, c.wz)
@@ -127,6 +136,8 @@ class SimLoop:
         w.step(config.SUBSTEPS)
         self.t += config.CONTROL_DT
         self.ticks += 1
+        if self.budget is not None:
+            self.budget.on_tick(self.t)
         # 8 publish
         for row in rows:
             self.trace.append(row)
@@ -137,6 +148,9 @@ class SimLoop:
         if self.bus is not None and now - self._last_state_pub >= 1.0 / config.STATE_HZ:
             self._last_state_pub = now
             self._publish(self._state_msg(readings))
+        if self.budget is not None and self.bus is not None and now - self._last_budget_pub >= 1.0:
+            self._last_budget_pub = now
+            self._publish(self.budget.message(self.perception.metrics(), self.speed))
 
     # ------------------------------------------------------------------
     def _submit_frame(self, drone: str, pose: Pose) -> None:
@@ -144,6 +158,8 @@ class SimLoop:
         frame_id = f"{drone}-{self._frame_seq}"
         if self.render:
             frame, cam = self.world.render_drone(drone)
+            if self.budget is not None:
+                self.budget.on_frame()
         else:
             frame, cam = _MOCK_FRAME, _cam_info(pose)
         self.perception.submit_frame(drone, frame, cam, self.t, frame_id)

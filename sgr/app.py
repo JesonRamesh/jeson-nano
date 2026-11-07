@@ -10,6 +10,7 @@ from sgr.contracts import PriorMap, Scenario
 from sgr.guidance import Guidance
 from sgr.loop import SimLoop
 from sgr.perception import Perception
+from sgr.perception.budget import Budget
 from sgr.swarm import Swarm
 from sgr.world import World
 
@@ -34,16 +35,19 @@ def main(argv: list[str] | None = None) -> int:
         line_of_sight=world.line_of_sight,  # mock occlusion
         pixel_to_world=world.pixel_to_world,  # required by local/remote
     )
-    swarm = Swarm(PriorMap.from_map(args.map, scenario), list(scenario.drones.ids))
+    prior = PriorMap.from_map(args.map, scenario)
+    swarm = Swarm(prior, list(scenario.drones.ids))
     bus = Bus()
+    budget = Budget()  # network / VRAM probes on a daemon thread; rates from the loop hooks
     # TODO(D): start sgr.server on a background thread here, passing `bus` (§3).
     loop = SimLoop(
         world,
         perception,
         swarm,
         scenario,
-        guidance=Guidance(),
+        guidance=Guidance(prior=prior, world=world),  # world: drone_pose + push_ff_back only (§9)
         bus=bus,
+        budget=budget,
         speed=args.speed,
         render=not args.no_render,
     )
@@ -56,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
         loop.run(max_ticks=args.max_ticks)
     except KeyboardInterrupt:
         pass
+    finally:
+        budget.close()
     print(f"sgr: stopped at t={loop.t:.1f}s after {loop.ticks} ticks")
     return 0
 
