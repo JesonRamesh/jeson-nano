@@ -5,7 +5,6 @@ import { useSocket } from '../net/useSocket'
 import { sim, useSim } from '../state/store'
 import { Banners } from './Banners'
 import { BeliefMap } from './BeliefMap'
-import { BudgetPanel } from './BudgetPanel'
 import { DronePanel, type DronePanelHandle } from './DronePanel'
 import { TracePanel } from './TracePanel'
 import './dashboard.css'
@@ -13,10 +12,10 @@ import './dashboard.css'
 const DEFAULT_DRONES = ['D1', 'D2', 'D3', 'D4'].map((id) => ({ id, colour: '#8a93a3' }))
 const TEMP_LIMIT_C = 70 // §7.4 retreat threshold
 
-/** Act 1 layout (§10.1), 1920×1080. */
+/** Act 1 layout (§10.1, adapted), 1920×1080: map + 3D | 2×2 drone feeds, short trace below. */
 export default function Dashboard() {
   const panels = useRef<(DronePanelHandle | null)[]>([])
-  const [big3d, setBig3d] = useState(false)
+  const [big3d, setBig3d] = useState(true) // 3D view is the big pane by default
   const { status, versionMismatch, send } = useSocket({
     onMessage: (msg) => sim.handle(msg),
     onFrame: (f) => panels.current[f.channel - 1]?.showFrame(f.jpeg, f.seq),
@@ -69,7 +68,6 @@ export default function Dashboard() {
           ))}
         </section>
         <TracePanel />
-        <BudgetPanel />
       </main>
     </div>
   )

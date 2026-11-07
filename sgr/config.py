@@ -30,7 +30,7 @@ FF_SPEED = 1.4  # m/s
 # Gemma (§7.3) - P picks the tag in H0-H1 and writes it here
 OLLAMA_URL = "http://localhost:11434/api/chat"
 GEMMA_MODEL_TAG = "gemma4:e4b"  # hour-1 bench: 26/30 correct
-GEMMA_TIMEOUT_S = 8.0  # measured p95 6.3 s on the demo laptop
+GEMMA_TIMEOUT_S = 12.0  # demo laptop with the 3D view in front: p50 7.8 s / p95 8.3 s (8 s timed out)
 
 # Swarm rules when unsure (§8.4)
 HEAT_RETREAT_C = 70.0  # temp above this -> RETREAT 3 m

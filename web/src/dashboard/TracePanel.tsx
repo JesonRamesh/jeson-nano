@@ -100,23 +100,37 @@ function Row({ row, colour, open, onToggle }: { row: TraceRow; colour: string; o
   )
 }
 
-/** Scrolling decision trace. Sticks to the bottom unless the user scrolls up. */
+const COLLAPSED_ROWS = 3
+
+/**
+ * Decision trace. Collapsed (default): only the 3 most recent decisions.
+ * Expanded: the full history, scrolling, stuck to the bottom unless the user scrolls up.
+ */
 export function TracePanel() {
   const trace = useSim((s) => s.trace)
   const hello = useSim((s) => s.hello)
   const listRef = useRef<HTMLUListElement>(null)
   const stick = useRef(true)
   const [open, setOpen] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(false)
   const colours = new Map(hello?.drones.map((d) => [d.id, d.colour]))
+  const rows = expanded ? trace : trace.slice(-COLLAPSED_ROWS)
 
   useEffect(() => {
     const el = listRef.current
     if (el && stick.current) el.scrollTop = el.scrollHeight
-  }, [trace])
+  }, [trace, expanded])
 
   return (
-    <section className="trace-panel">
-      <h2>Decision trace</h2>
+    <section className={`trace-panel ${expanded ? 'expanded' : 'collapsed'}`}>
+      <div className="trace-head">
+        <h2>Decision trace</h2>
+        {trace.length > COLLAPSED_ROWS && (
+          <button className="trace-toggle" onClick={() => setExpanded(!expanded)}>
+            {expanded ? 'Show latest 3' : `Show all (${trace.length})`}
+          </button>
+        )}
+      </div>
       <ul
         ref={listRef}
         onScroll={(e) => {
@@ -125,7 +139,7 @@ export function TracePanel() {
         }}
       >
         {trace.length === 0 && <li className="muted trace-empty">No decisions yet.</li>}
-        {trace.map((r) => (
+        {rows.map((r) => (
           <Row
             key={r.id}
             row={r}
