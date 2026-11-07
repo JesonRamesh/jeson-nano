@@ -19,7 +19,12 @@ branches into edges, then clean it up so a human can finish it in /editor:
     every edge is a straight line that stays in free space;
   * the entrance (scenario.json "entrance", or --entrance) becomes node n1.
 
-Node kinds: entrance, junction (>= 3 edges), dead_end (1 edge), waypoint (2 edges).
+Node kinds (sgr/contracts.py NodeKind): entrance; junction (>= 3 edges, or a bend);
+room (dead end, settled into the open middle of the room); door (bend/pass-through
+narrower than --door-width). "stairs" is never proposed: set it by hand in /editor.
+If scenario.json has no survivor / drones yet, placeholders are added so the map
+loads (survivor at the dead end farthest from the entrance, drones around the
+entrance). Move them in /editor.
 Edge "width" = 2 x the 10th-percentile clearance along the edge (m), i.e. its
 narrowest typical point (doors). Ids are in breadth-first order from the entrance.
 Edge ids are regenerated, so re-check "compromised" / "beats" afterwards
@@ -259,8 +264,11 @@ def settle_leaves(g: G, dist: np.ndarray) -> None:
         clear = np.array([dist[p] for p in path])
         # walk back while clearance stays within 2 px of the best seen so far (tolerates small
         # dips such as an alcove mouth), and stop at the most open point of that stretch
+        # ...but never further than 1.5 x the best half-width (corridors that slowly widen)
+        steps = np.r_[0, np.cumsum(np.linalg.norm(np.diff(np.asarray(path, float), axis=0), axis=1))]
         i, best = 0, 0
-        while i + 1 < len(path) - 1 and clear[i + 1] >= clear[best] - 2.0:
+        while (i + 1 < len(path) - 1 and clear[i + 1] >= clear[best] - 2.0
+               and steps[i + 1] <= 1.5 * max(clear[best], clear[i + 1])):
             i += 1
             if clear[i] > clear[best]:
                 best = i
@@ -419,7 +427,9 @@ def propose(grid: np.ndarray, pitch: float, entrance_xy, a) -> tuple[dict, dict]
     nodes = []
     for n in order:
         k = len(adj[n])
-        kind = "entrance" if n == ent_f else "junction" if k >= 3 else "dead_end" if k == 1 else "waypoint"
+        narrow = 2 * dist[final_nodes[n]] * pitch < a.door_width
+        kind = ("entrance" if n == ent_f else "junction" if k >= 3 else "room" if k == 1
+                else "door" if narrow else "junction")
         x, y = (round(float(entrance_xy[0]), 2), round(float(entrance_xy[1]), 2)) if n == ent_f and free[er, ec] else xy(final_nodes[n])
         nodes.append({"id": f"n{rank[n]}", "x": x, "y": y, "kind": kind})
     edges = []
@@ -428,7 +438,8 @@ def propose(grid: np.ndarray, pitch: float, entrance_xy, a) -> tuple[dict, dict]
         edges.append({"id": f"e{len(edges) + 1}", "a": f"n{a_}", "b": f"n{b_}", "width": wd})
     stats["nodes"], stats["edges"] = len(nodes), len(edges)
     stats["loops"] = len(edges) - len(nodes) + 1
-    stats["kinds"] = {k: sum(n["kind"] == k for n in nodes) for k in ("entrance", "junction", "dead_end", "waypoint")}
+    stats["kinds"] = {k: sum(n["kind"] == k for n in nodes) for k in ("entrance", "junction", "room", "door")}
+    stats["deg"] = {f"n{rank[n]}": len(adj[n]) for n in order}
     return {"nodes": nodes, "edges": edges}, stats
 
 
@@ -447,12 +458,16 @@ def draw_preview(path: Path, grid: np.ndarray, graph: dict, pitch: float) -> Non
         pass
     P = lambda n: (int(n["x"] / pitch * scale), int((h - n["y"] / pitch) * scale))
     byid = {n["id"]: n for n in graph["nodes"]}
+    deg_of = {}
+    for e in graph["edges"]:
+        deg_of[e["a"]] = deg_of.get(e["a"], 0) + 1
+        deg_of[e["b"]] = deg_of.get(e["b"], 0) + 1
     for e in graph["edges"]:
         a, b = P(byid[e["a"]]), P(byid[e["b"]])
         cv2.line(img, a, b, C_EDGE, max(2, scale // 2), cv2.LINE_AA)
     for n in graph["nodes"]:
         c = P(n)
-        if n["kind"] == "waypoint":
+        if deg_of.get(n["id"], 0) == 2:
             cv2.circle(img, c, scale, C_WAYPOINT, -1, cv2.LINE_AA)
             cv2.circle(img, c, scale, C_EDGE, 1, cv2.LINE_AA)
             continue
@@ -467,6 +482,47 @@ def draw_preview(path: Path, grid: np.ndarray, graph: dict, pitch: float) -> Non
     cv2.imwrite(str(path), img)
 
 
+def add_placeholders(sc: dict, graph: dict, grid: np.ndarray, pitch: float, deg: dict) -> None:
+    """Fill the fields Scenario requires (survivor, drones) if missing, so the map loads."""
+    h = grid.shape[0]
+    is_free = lambda x, y: 0 <= int(y / pitch) < h and 0 <= int(x / pitch) < grid.shape[1] and \
+        grid[h - 1 - int(y / pitch), int(x / pitch)] > 127
+    ex, ey = sc["entrance"]["x"], sc["entrance"]["y"]
+    if "survivor" not in sc:
+        adj = {n["id"]: [] for n in graph["nodes"]}
+        pos = {n["id"]: (n["x"], n["y"]) for n in graph["nodes"]}
+        for e in graph["edges"]:
+            L = float(np.hypot(*np.subtract(pos[e["a"]], pos[e["b"]])))
+            adj[e["a"]].append((e["b"], L)); adj[e["b"]].append((e["a"], L))
+        import heapq
+        dist, pq = {"n1": 0.0}, [(0.0, "n1")]
+        while pq:
+            d, u = heapq.heappop(pq)
+            if d > dist.get(u, 1e18):
+                continue
+            for v, L in adj[u]:
+                if d + L < dist.get(v, 1e18):
+                    dist[v] = d + L; heapq.heappush(pq, (d + L, v))
+        ends = [i for i in dist if deg.get(i) == 1] or list(dist)
+        far = max(ends, key=dist.get)
+        sc["survivor"] = {"x": pos[far][0], "y": pos[far][1], "yaw": 0.0}
+        print(f"  placeholder: survivor at {far} {pos[far]} ({dist[far]:.1f} m by graph) -- move it in /editor",
+              file=sys.stderr)
+    if "drones" not in sc:
+        starts = []
+        for r in np.arange(0.4, 3.0, 0.2):
+            for ang in np.linspace(0, 2 * np.pi, 16, endpoint=False):
+                x, y = ex + r * np.cos(ang), ey + r * np.sin(ang)
+                if is_free(x, y) and all(np.hypot(x - sx, y - sy) >= 0.5 for sx, sy in starts):
+                    starts.append((round(float(x), 2), round(float(y), 2)))
+                if len(starts) == 4:
+                    break
+            if len(starts) == 4:
+                break
+        sc["drones"] = {"ids": ["D1", "D2", "D3", "D4"], "start": [list(p) for p in starts], "altitude": 1.6}
+        print(f"  placeholder: drone starts {starts} -- move them in /editor", file=sys.stderr)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("map_dir", type=Path)
@@ -476,6 +532,7 @@ def main() -> None:
     ap.add_argument("--merge", type=float, default=0.8, help="merge junctions closer than this (m)")
     ap.add_argument("--dp-tol", type=float, default=0.3, help="max deviation of straight edges from the skeleton (m)")
     ap.add_argument("--min-width", type=float, default=0.6, help="ignore passages narrower than this (m)")
+    ap.add_argument("--door-width", type=float, default=1.2, help="pass-throughs narrower than this are 'door' (m)")
     ap.add_argument("--stdout", action="store_true", help="print the graph JSON, don't write any file")
     a = ap.parse_args()
 
@@ -508,6 +565,7 @@ def main() -> None:
         print(f"  WARNING: nodes on wall cells: {bad}", file=sys.stderr)
 
     sc["graph"] = graph
+    add_placeholders(sc, graph, grid, pitch, st["deg"])
     eids = {e["id"] for e in graph["edges"]}
     nids = {n["id"] for n in graph["nodes"]}
     stale = [c["edge"] for c in sc.get("compromised", []) if c.get("edge") not in eids]

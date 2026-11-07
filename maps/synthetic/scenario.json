@@ -36,7 +36,7 @@
         "id": "n3",
         "x": 5.05,
         "y": 13.15,
-        "kind": "waypoint"
+        "kind": "junction"
       },
       {
         "id": "n4",
@@ -48,13 +48,13 @@
         "id": "n5",
         "x": 6.85,
         "y": 14.65,
-        "kind": "waypoint"
+        "kind": "junction"
       },
       {
         "id": "n6",
         "x": 9.55,
         "y": 12.45,
-        "kind": "waypoint"
+        "kind": "junction"
       },
       {
         "id": "n7",
@@ -66,7 +66,7 @@
         "id": "n8",
         "x": 9.65,
         "y": 14.65,
-        "kind": "waypoint"
+        "kind": "junction"
       },
       {
         "id": "n9",
@@ -78,7 +78,7 @@
         "id": "n10",
         "x": 12.95,
         "y": 12.35,
-        "kind": "waypoint"
+        "kind": "junction"
       },
       {
         "id": "n11",
@@ -90,7 +90,7 @@
         "id": "n12",
         "x": 11.75,
         "y": 13.55,
-        "kind": "waypoint"
+        "kind": "junction"
       },
       {
         "id": "n13",
@@ -102,19 +102,19 @@
         "id": "n14",
         "x": 27.75,
         "y": 9.85,
-        "kind": "dead_end"
+        "kind": "room"
       },
       {
         "id": "n15",
         "x": 17.05,
         "y": 2.15,
-        "kind": "dead_end"
+        "kind": "room"
       },
       {
         "id": "n16",
         "x": 20.15,
         "y": 5.15,
-        "kind": "dead_end"
+        "kind": "room"
       }
     ],
     "edges": [
@@ -221,5 +221,37 @@
         "width": 0.8
       }
     ]
+  },
+  "survivor": {
+    "x": 27.75,
+    "y": 9.85,
+    "yaw": 0.0
+  },
+  "drones": {
+    "ids": [
+      "D1",
+      "D2",
+      "D3",
+      "D4"
+    ],
+    "start": [
+      [
+        2.47,
+        10.06
+      ],
+      [
+        2.07,
+        10.46
+      ],
+      [
+        1.67,
+        10.06
+      ],
+      [
+        2.07,
+        9.66
+      ]
+    ],
+    "altitude": 1.6
   }
 }
