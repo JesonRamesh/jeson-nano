@@ -4,7 +4,9 @@
 - Cost per cell = 1 + 5·heat_norm + 3·near_wall.
 - `distance_field` is a fast Dijkstra over the same costs (exploration's nearest-target search).
 - Drone paths (`drone=True`, the default) also treat the assumed > 70 °C core around a confirmed fire
-  (belief.heat >= HOT_CORE) as impassable: a drone must never plan through heat it would retreat from.
+  (belief.heat >= HOT_CORE, > ~150 °C) as impassable. Between 70 and 150 °C a drone may cross briefly
+  (heat is a steep cost, so the crossing is as short as possible): on a one-way map the only corridor can
+  pass a fire, and a short pass is what a real drone would do (hovering there is what damages it).
   The firefighter route (`drone=False`) follows §8.3 exactly: heat is a cost, fire + 1 m is impassable.
 """
 
@@ -23,7 +25,8 @@ INFLATE_M = 0.3
 FIRE_MARGIN_M = 1.0
 NEAR_WALL_M = 0.8  # near_wall ramps 1 -> 0 between INFLATE_M and this
 SQRT2 = math.sqrt(2.0)
-HOT_CORE = 0.99  # belief.heat at / above this = assumed over the drones' 70 °C limit
+HOT_CORE = 2.6  # belief.heat at / above this (~150 °C) = never, not even crossing (70 °C = 1.0)
+NO_STAY = 0.99  # heat_norm 1 = the 70 °C limit: drones may cross above it but never stop there (goals, posts)
 SNAP_CELLS = 20  # a drone deep in a hot zone may be up to 4 m from the nearest plannable cell
 
 Point = tuple[float, float]

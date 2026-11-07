@@ -8,7 +8,8 @@
   (a sentinel, never the lead or the survivor drone) flies to ~2.5 m from the blockage so its LiDAR can
   see whether it is still there (after a judge's Undo, nothing else would ever clear it).
 - Chain: route -> RDP -> turn points (> 35°). D_survivor hovers over the survivor, D_lead goes to the
-  entrance to meet the firefighter, any other drone takes the largest turns as a sentinel (yaw sweep).
+  entrance to meet the firefighter, every other drone becomes a checkpoint (sentinel): sharpest turns first,
+  then the middle of the longest stretch between checkpoints, so the drones mark out the path.
   Rebuilt when the route changes or a drone is lost.
 - Act 1, once the chain is ready (act2_start already saved with everyone at their posts): the chain
   drones split the route and patrol it (lead first, sentinel middle, survivor drone the last stretch),
@@ -31,7 +32,7 @@ from sgr.contracts import Checkpoint, Evidence, Graph, OldRoute, Pose, Route
 from .agent import Agent
 from .belief import BeliefGrid
 from .blackboard import Blackboard
-from .planner import DistanceField, astar, cost_map, path_hits, path_length, rdp, turn_points
+from .planner import NO_STAY, DistanceField, astar, cost_map, path_hits, path_length, rdp, turn_points
 from .trace import Trace
 
 ROUTE_MARGIN_M = 0.5  # new blocked/fire cell this close to the route -> re-plan
@@ -42,6 +43,8 @@ OLD_ROUTE_S = 6.0
 REPLAN_SETTLE_S = 1.0  # after a re-plan, more of the same blockage is folded into one follow-up (first one: instant)
 NO_ROUTE_RECHECK_S = 2.0
 REPOST_S = 5.0  # a watcher pushed off its post (too hot) gets a new one after this
+WATCH_MIN_CORRIDOR_M = 3.0  # a watch post is at least this far from any corridor: a flare-up fire there leaves
+#                             ~70 °C on the corridor centreline (crossable), its > 150 °C core (~2.2 m) stays out
 WATCH_MAX_HEAT = 0.8  # heat_norm limit at a watch post (~60 °C: under the 70 °C retreat limit)
 WATCH_M = 3.3  # fire-watch distance: ~55 °C on the heat model, under the 70 °C retreat limit
 TURN_DEG = 35.0
@@ -50,7 +53,7 @@ CHAIN_READY_MAX_S = 40.0  # ... or call the chain ready this long after it forme
 PATROL_END_M = 4.0  # patrol stops this far from the lead / survivor drone (they watch their own ends)
 PATROL_STEP_M = 1.0  # patrol waypoint spacing along the route
 PATROL_MAX_HEAT = 0.3  # skip waypoints where the belief already holds this much heat (retreat ping-pong)
-CHAIN_MAX = 3  # survivor + lead + one sentinel (the three checkpoints); extra drones keep exploring
+# every drone not watching a fire joins the chain: survivor + lead + checkpoints along the route
 _RING = np.radians(np.arange(0, 360, 10))
 
 Pt = tuple[float, float]
@@ -157,7 +160,7 @@ class Rescue:
                 i, j = self.belief.world_to_cell(px, py)
                 if not (self.belief.inside(i, j) and cm.traversable[j, i] and np.isfinite(df.cost[j, i])):
                     continue
-                if self._los((px, py), target) and df.cost[j, i] < bc:
+                if self.belief.heat[j, i] < NO_STAY and self._los((px, py), target) and df.cost[j, i] < bc:
                     best, bc = (px, py), df.cost[j, i]
             if best is not None:
                 return best
@@ -251,9 +254,27 @@ class Rescue:
         self.path = new
         self.bb.route = Route(points=pts, status="ok", version=old.version + 1)
 
+    def _checkpoint_posts(self, turns, n: int, plan, cm) -> list[tuple[Pt, str]]:
+        """n checkpoint positions along the route: turns (sharpest first), then the middle of the longest
+        stretch between checkpoints so far, so the drones space themselves out as waypoints."""
+        posts: list[tuple[Pt, str]] = []
+        for (px, py), ang in turns[:n]:
+            posts.append(((px, py), f"checkpoint: {ang:.0f}° turn"))
+        taken = sorted({self._along(xy) for _, _, xy, _ in plan} | {self._along(xy) for xy, _ in posts}
+                       | {0.0, float(len(self.path) - 1)})
+        while len(posts) < n:
+            _, a, b = max((b - a, a, b) for a, b in zip(taken, taken[1:]))
+            k = int((a + b) / 2)
+            cands = sorted(range(len(self.path)), key=lambda q: abs(q - k))  # nearest point a drone can hover at
+            q = next((q for q in cands if self._flyable(cm, self.path[q])), k)
+            posts.append((self.path[q], "checkpoint: on the route"))
+            taken = sorted(taken + [float(q)])
+        return posts
+
     def _flyable(self, cm, xy: Pt) -> bool:
+        """A drone can hover here: reachable and under the 70 °C limit (crossing hotter cells is allowed)."""
         i, j = self.belief.world_to_cell(*xy)
-        return self.belief.inside(i, j) and bool(cm.traversable[j, i])
+        return self.belief.inside(i, j) and bool(cm.traversable[j, i]) and self.belief.heat[j, i] < NO_STAY
 
     def _ahead(self, path: list[Pt]) -> list[Pt]:
         """The part of `path` still ahead of the firefighter (all of it in Act 1)."""
@@ -300,35 +321,35 @@ class Rescue:
         def near(p: Pt):
             return lambda d: math.hypot(alive[d].x - p[0], alive[d].y - p[1])
 
+        def reach(p: Pt):
+            """By flight path (drone rules), not straight line: a drone sealed off by heat can't take this role."""
+            df = DistanceField(self.belief, p)
+
+            def cost(d: str) -> float:
+                i, j = self.belief.world_to_cell(alive[d].x, alive[d].y)
+                c = df.cost[j, i] if self.belief.inside(i, j) else math.inf
+                return float(c) if math.isfinite(c) else 1e6 + near(p)(d)  # unreachable: last resort, nearest
+            return cost
+
         free = list(cands)
         # the drone already over the survivor stays there (less shuffling); otherwise the nearest one
         holder = next((d for d, r in self.roles.items() if r == "survivor" and d in free), None)
-        surv = holder or min(free, key=near(target))
+        surv = holder or min(free, key=reach(target))
         free.remove(surv)
         plan: list[tuple[str, str, Pt, dict]] = [(surv, "survivor", target, {"task": "over the survivor"})]
         if free:
             meet = self.ff if self.ff is not None else self.entrance  # Act 2: lead with the firefighter
             keep = self.bb.lead if self.ff is not None and self.bb.lead in free else None  # Guidance steers it
-            lead = keep or min(free, key=near(meet))
+            lead = keep or min(free, key=reach(meet))
             free.remove(lead)
             face = self.path[min(5, len(self.path) - 1)]
             task = "lead: guiding the firefighter" if self.ff is not None else "lead: meet the firefighter"
             plan.append((lead, "lead", meet, {"face": face, "task": task}))
-        # sentinels: largest turns first (nearest free drone each); spare drones go to the route's midpoint
-        for k in range(max(0, CHAIN_MAX - len(plan))):
-            if not free:
-                break
-            if k < len(turns):
-                (px, py), ang = turns[k]
-                xy, task = (px, py), f"sentinel: {ang:.0f}° turn"
-            else:
-                xy, task = self.path[len(self.path) // 2], "sentinel: mid-route"
+        # every other drone becomes a checkpoint: the sharpest turns first, then the biggest gaps along the route
+        for xy, task in self._checkpoint_posts(turns, len(free), plan, cm):
             d = min(free, key=near(xy))
             free.remove(d)
             plan.append((d, "sentinel", xy, {"sweep": True, "task": task}))
-        for d in free:  # not needed in the chain: back to exploring
-            if d in self.roles:
-                agents[d].unstation()
 
         first = not self.roles
         self.roles = {}
@@ -369,21 +390,30 @@ class Rescue:
                 if post is not None:
                     self._watch_post_xy, self._watch_t = post, t
                     ag.station(post, face=self.watch_fire, mode="WATCHING", task="watching the fire")
+                else:  # nowhere safe to watch from any more: back to exploring (no watcher -> no flare-up)
+                    ag.unstation()
+                    self.watcher, self._watch_done = None, True
             return
         if self.watcher is not None or self._watch_done:
             return
         fires = [h for h in self.bb.hazards.values() if h.kind == "fire"]
         if not fires:
             return
-        fire = fires[0].xy
         cands = [d for d in alive if d not in self.roles and not agents[d].inspecting and agents[d].mode != "RETREAT"]
         if not cands:
             return
-        d = min(cands, key=lambda d: math.hypot(alive[d].x - fire[0], alive[d].y - fire[1]))
-        post = self._watch_post(fire, alive[d])
-        if post is None:
-            self._watch_done = True
+        # watch whichever confirmed fire offers the post furthest from the corridors (spread fires: some have none)
+        best = None
+        for h in fires:
+            d = min(cands, key=lambda d: math.hypot(alive[d].x - h.xy[0], alive[d].y - h.xy[1]))
+            post = self._watch_post(h.xy, alive[d])
+            if post is not None and (best is None or self._corridor_dist(post) > best[0]):
+                best = (self._corridor_dist(post), h.xy, d, post)
+        if best is None:
+            if len(fires) >= 3:  # several fires confirmed and still nowhere safe to watch from: give up the watch
+                self._watch_done = True
             return
+        _, fire, d, post = best
         self.watcher, self.watch_fire = d, fire
         self._watch_post_xy, self._watch_t = post, t
         agents[d].release()
@@ -400,7 +430,7 @@ class Rescue:
         cm = cost_map(self.belief)
         df = DistanceField(self.belief, (pose.x, pose.y))
         best, score = None, -math.inf
-        for r in (WATCH_M, WATCH_M + 0.3, WATCH_M - 0.2):
+        for r in (WATCH_M, WATCH_M + 0.3, WATCH_M - 0.2, 4.0, 4.5, 5.0):
             for a in _RING:
                 px, py = fire[0] + r * math.cos(a), fire[1] + r * math.sin(a)
                 i, j = self.belief.world_to_cell(px, py)
@@ -408,6 +438,8 @@ class Rescue:
                     continue
                 if self.belief.heat[j, i] >= WATCH_MAX_HEAT or not self._los((px, py), fire):
                     continue  # spread fires: 3.3 m from this one can be right next to another
+                if self._corridor_dist((px, py)) < WATCH_MIN_CORRIDOR_M:
+                    continue  # never in a corridor: the flare-up would put a fire on the way to everything
                 s = self._corridor_dist((px, py)) - 0.01 * df.cost[j, i] * self.belief.res
                 if s > score:
                     best, score = (px, py), s
@@ -416,12 +448,8 @@ class Rescue:
         return None
 
     def _corridor_dist(self, p: Pt) -> float:
-        nodes = {n.id: (n.x, n.y) for n in self.graph.nodes}
-        best = math.inf
-        for e in self.graph.edges:
-            if e.a in nodes and e.b in nodes:
-                best = min(best, _seg_dist(p, nodes[e.a], nodes[e.b]))
-        return best
+        """Distance to the nearest through-corridor (dead-end room edges don't count)."""
+        return min((_seg_dist(p, a, b) for a, b in through_edges(self.graph)), default=math.inf)
 
     def _los(self, a: Pt, b: Pt) -> bool:
         d = math.dist(a, b)
@@ -446,3 +474,15 @@ def _seg_dist(p: Pt, a: Pt, b: Pt) -> float:
     L = dx * dx + dy * dy
     u = 0.0 if L == 0 else max(0.0, min(1.0, ((p[0] - ax) * dx + (p[1] - ay) * dy) / L))
     return math.hypot(p[0] - (ax + u * dx), p[1] - (ay + u * dy))
+
+def through_edges(graph) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """Corridor segments a fire could cut: edges that don't just lead into a dead-end room (a leaf node that
+    isn't the entrance). A fire inside a dead-end room can't block the way between other places."""
+    nodes = {n.id: n for n in graph.nodes}
+    deg: dict[str, int] = {}
+    for e in graph.edges:
+        deg[e.a] = deg.get(e.a, 0) + 1
+        deg[e.b] = deg.get(e.b, 0) + 1
+    leaf = {nid for nid, n in nodes.items() if deg.get(nid, 0) <= 1 and n.kind != "entrance"}
+    return [((nodes[e.a].x, nodes[e.a].y), (nodes[e.b].x, nodes[e.b].y))
+            for e in graph.edges if e.a in nodes and e.b in nodes and e.a not in leaf and e.b not in leaf]

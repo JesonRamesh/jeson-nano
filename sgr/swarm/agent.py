@@ -18,7 +18,7 @@ from sgr.contracts import Pose, Readings, VelCmd
 
 from .areas import Area
 from .belief import BeliefGrid
-from .planner import DistanceField, cost_map, plan_path
+from .planner import NO_STAY, DistanceField, cost_map, plan_path
 
 # tactical
 GOAL_NEAR_CELLS = 3  # a goal is a traversable cell within 0.6 m of an unsearched cell
@@ -31,6 +31,7 @@ SWEEP_WZ = 2.0  # rad/s
 THERMO_LEN = 40  # thermometer history: the last 4 s of (t, x, y, temp), to locate an unseen heat source
 SWEEP_EVERY_S = 15.0  # at most one 360° sweep per this many seconds ...
 SWEEP_APART_M = 3.0  # ... unless it is this far from the last one (no spinning on the spot)
+CROSS_MIN_SPEED = 0.3  # m/s: slower than this is hovering, not crossing
 SLOW_MS = 0.15  # below this speed, don't chase the travel direction (it flips around: spinning)
 SCAN_AMPL = math.radians(70)  # idle / sentinel camera scan: ±70° ...
 SCAN_RATE = 0.5  # ... at this angular frequency (rad/s), never a continuous spin
@@ -77,7 +78,6 @@ class Agent:
         self._stall_left = math.inf
         self._sweep_left = 0.0
         self._v = np.zeros(2)
-        self.given_up: np.ndarray | None = None  # cells this drone looked for and could not see (bool [j, i])
         # inspect: face `_focus`; if `_standoff` is set, fly there first (§8.4)
         self._focus: tuple[float, float] | None = None
         self._standoff: tuple[float, float] | None = None
@@ -166,6 +166,12 @@ class Agent:
         self.invalidate()
 
     @property
+    def crossing(self) -> bool:
+        """Moving along a planned path (not hovering): may pass briefly through heat between 70 and 150 °C."""
+        moving = self.mode in ("TRANSIT", "EXPLORING", "CHAIN", "WATCHING", "INSPECTING") or self._patrol is not None
+        return moving and float(np.linalg.norm(self._v)) > CROSS_MIN_SPEED
+
+    @property
     def stationed(self) -> bool:
         return self._station is not None
 
@@ -197,29 +203,23 @@ class Agent:
         return f"area {self.area}" if self.area else ""
 
     def _unsearched(self, belief: BeliefGrid, area: Area) -> np.ndarray:
-        uns = area.unsearched(belief)
-        if self.given_up is not None:
-            uns &= ~self.given_up
-        return uns
+        return area.unsearched(belief)  # dead ends any drone found are already out (belief.dead)
 
     def _give_up_goal(self, belief: BeliefGrid, area: Area) -> None:
-        """Swept / stalled at this goal and the cells near it are still unseen: stop chasing them."""
+        """Swept / stalled at this goal and the cells near it are still unseen: a dead end. Shared with the
+        whole swarm (belief.dead), so no other drone is sent to look for them either."""
         if self.goal is None:
             return
-        if self.given_up is None:
-            self.given_up = np.zeros((belief.h, belief.w), bool)
         i, j = self.goal
         r = GOAL_NEAR_CELLS
         sl = (slice(max(0, j - r), j + r + 1), slice(max(0, i - r), i + r + 1))
-        self.given_up[sl] |= area.unsearched(belief)[sl]
-
-    def forget_given_up(self) -> None:
-        """The map changed (e.g. debris cleared): cells given up on are worth another try."""
-        self.given_up = None
+        newly = area.unsearched(belief)[sl]
+        belief.dead[sl] |= newly
+        belief.dead_t[sl][newly] = belief.now
 
     def _goal_mask(self, belief: BeliefGrid, area: Area) -> np.ndarray:
         cm = cost_map(belief)
-        return binary_dilation(self._unsearched(belief, area), _STRUCT) & cm.traversable & (belief.heat < 0.99)
+        return binary_dilation(self._unsearched(belief, area), _STRUCT) & cm.traversable & (belief.heat < NO_STAY)
 
     def _plan(self, t: float, pose: Pose, belief: BeliefGrid, area: Area) -> bool:
         """Pick the nearest reachable goal near unsearched cells of the area. False = nothing left here."""
@@ -269,8 +269,11 @@ class Agent:
                     want, _ = self._follow(pose, self._retreat_path, RETREAT_SPEED)
                 else:
                     self.mode, self._retreat_path = "IDLE", None
-                    if self._station is not None:  # the post was too hot: hold here instead
-                        self._station, self._spath = (pose.x, pose.y), None
+                    if self._station is not None:
+                        si, sj = belief.world_to_cell(*self._station)
+                        if belief.inside(si, sj) and belief.heat[sj, si] >= NO_STAY:
+                            self._station = (pose.x, pose.y)  # the post itself is too hot: hold here instead
+                        self._spath = None  # otherwise back to the post (the lead must still reach the entrance)
             elif self._retreat_left > 0 and self._retreat_dir is not None:
                 want = np.array(self._retreat_dir) * RETREAT_SPEED
                 self._retreat_left -= RETREAT_SPEED * config.CONTROL_DT

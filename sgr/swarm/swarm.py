@@ -39,6 +39,8 @@ from .rescue import Rescue
 from .planner import DistanceField, cost_map, path_hits, path_length, snap
 from .trace import Trace
 
+EXCLUDE_RETRY_S = 30.0  # a drone retries areas it gave up on after this
+DEAD_END_TTL_S = 45.0  # a "couldn't see it" dead-end mark is retried after this
 SAME_BLOCKAGE_M = 2.5  # new blocked cells this close to a reported blockage extend it (one trace row each)
 
 
@@ -55,7 +57,8 @@ class Swarm:
                              (scenario_prior.entrance.x, scenario_prior.entrance.y))
         self.agents = {d: Agent(d, scenario_prior.altitude) for d in self.drones}
         self._excluded: dict[str, set[str]] = {d: set() for d in self.drones}
-        self._excluded_version = self.belief.version
+        self._excluded_version = self.belief.open_version
+        self._excluded_t = 0.0
         self._path_replans: set[str] = set()  # blockages already reported as a REPLAN
         self.t = 0.0
 
@@ -65,6 +68,7 @@ class Swarm:
     ) -> tuple[dict[str, VelCmd], list[TraceRow], SwarmState]:
         """`ff` = the firefighter's tracked pose in Act 2 (None in Act 1): re-routes start from it."""
         self.t = t
+        self.belief.now = t
         self.rescue.ff = (ff.x, ff.y) if ff is not None else None
         for d, r in readings.items():
             self.bb.heartbeat(d, t, r.pose)
@@ -94,6 +98,7 @@ class Swarm:
                 self._excluded[d].add(area.id)
                 release(self.bb.claims, d)
                 ag.set_area(None)
+                self._area_done(t, d, area)
             cmds[d] = cmd
 
         state = SwarmState(
@@ -201,12 +206,37 @@ class Swarm:
             jj, ii = np.nonzero(seen & (self.belief.state == UNSAFE))  # re-observed: safe again
             for a, b in zip(ii.tolist(), jj.tolist()):
                 self.belief.set_state(a, b, "free")
-        if self.belief.version != self._excluded_version:  # the map changed: give up-areas another chance
-            self._excluded_version = self.belief.version
+        # "couldn't see it from here" marks expire (often just heat or a drone in the way at the time);
+        # rooms cut off by debris stay out for good through belief.reachable_now()
+        expired = self.belief.dead & (self.belief.dead_t < t - DEAD_END_TTL_S)
+        if t - self._excluded_t > EXCLUDE_RETRY_S:  # areas a drone gave up on get another look now and then
+            self._excluded_t = t
             for s in self._excluded.values():
                 s.clear()
-            for ag in self.agents.values():
-                ag.forget_given_up()
+        if expired.any():
+            self.belief.dead &= ~expired
+            for s in self._excluded.values():
+                s.clear()
+        if self.belief.open_version != self._excluded_version:  # the map OPENED up (debris gone): re-try dead ends
+            self._excluded_version = self.belief.open_version
+            for s in self._excluded.values():
+                s.clear()
+            self.belief.dead[:] = False
+
+    def _area_done(self, t: float, d: str, area: Area) -> None:
+        """Nothing left this drone can search in the area: say whether it was a dead end, then move on."""
+        cut = area.cut_off(self.belief)
+        dead = int((area.mask & self.belief.dead & ~self.belief.searched).sum())
+        if cut >= 5:
+            why = f"area {area.id} is a dead end: blocked by debris ({cut * self.belief.res ** 2:.0f} m² cut off)"
+        elif dead >= 5:
+            why = f"area {area.id} is a dead end: the rest can't be seen from here"
+        else:
+            why = f"area {area.id} searched"
+        self.trace.log_change("area_done", area.id, t, d, "EXPLORE", f"{d}: {why}, turning back to explore elsewhere",
+                              Evidence(sensor="planner", value={"area": area.id, "cut_off_cells": cut,
+                                                                "dead_end_cells": dead,
+                                                                "unsearched": round(area.unsearched_fraction(self.belief), 3)}))
 
     def _path_replan(self, t: float, seen_by: str, ag: Agent, blocked: list[tuple[int, int]]) -> None:
         """A drone's planned path just got blocked by debris: REPLAN (once per blockage)."""

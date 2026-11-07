@@ -25,7 +25,7 @@ from sgr.contracts import Detection, Evidence, Pose, SurvivorState
 from .agent import Agent
 from .belief import FIRE, FREE, WALL, BeliefGrid
 from .blackboard import Blackboard
-from .planner import DistanceField, cost_map, path_hits
+from .planner import NO_STAY, DistanceField, cost_map, path_hits
 from .trace import Trace
 
 FIRE_RADIUS_M = 0.5  # cells this close to a confirmed fire become `fire`
@@ -39,8 +39,12 @@ HEAT_SIGMA_M = 1.5  # drones' thermometers measure (a property of fire, not hidd
 HEAT_NORM_MAX = 4.0
 RETREAT_CLEAR_M = 3.5  # retreat to the nearest reachable spot at least this far from the heat
 RETREAT_COOLDOWN_S = 4.0
+CROSS_MAX_C = 150.0  # a drone crossing heat along its path retreats anyway above this ...
+CROSS_MAX_S = 6.0  # ... or if it has been over 70 °C this long (stuck in the heat)
 LOCATE_WINDOW_S = 3.0  # thermometer readings used to locate an unseen heat source
 LOCATE_R_M = 5.0  # search radius for it
+SUSPECT_NORM_MAX = 2.0  # a thermometer estimate can be off (mirror ambiguity): drones avoid stopping there and
+#                        cross it as briefly as possible, but only a camera-confirmed fire may seal a passage
 RELOCATE_M = 1.0  # re-plan a retreat when the source estimate moves this much
 REJECTED_MERGE_M = 1.0  # a new detection this close to a rejected one (same label) is ignored
 _RING = np.radians(np.arange(0, 360, 15))
@@ -69,6 +73,7 @@ class Hazards:
     _last_retreat: dict[str, float] = field(default_factory=dict)
     _retreat_src: dict[str, tuple[float, float]] = field(default_factory=dict)  # what each retreat flees from
     _suspects: dict[str, tuple[float, float]] = field(default_factory=dict)  # heat sources located by thermometer
+    _hot_since: dict[str, float] = field(default_factory=dict)  # when each drone went over 70 °C
     rejected: list[tuple[str, float, float]] = field(default_factory=list)  # (label, x, y) ruled out before
     fresh_fire: list[tuple[str, str, list[tuple[int, int]]]] = field(default_factory=list)  # (sensor, drone, cells)
 
@@ -195,7 +200,13 @@ class Hazards:
         est = self._locate_heat(t, agent) if temp > config.HEAT_DANGER_C else None
         if est is not None:
             self._suspect_heat(drone, est)
-        if (temp > config.HEAT_RETREAT_C and agent.mode != "RETREAT"
+        if temp <= config.HEAT_RETREAT_C:
+            self._hot_since.pop(drone, None)
+        else:
+            self._hot_since.setdefault(drone, t)
+        crossing = (agent.crossing and temp < CROSS_MAX_C
+                    and t - self._hot_since.get(drone, t) < CROSS_MAX_S)  # a short pass along its path
+        if (temp > config.HEAT_RETREAT_C and agent.mode != "RETREAT" and not crossing
                 and t - self._last_retreat.get(drone, -math.inf) > RETREAT_COOLDOWN_S):
             self._last_retreat[drone] = t
             src = est or self._heat_source(pose)
@@ -257,6 +268,8 @@ class Hazards:
             i, j = self.belief.world_to_cell(px, py)
             if not (self.belief.inside(i, j) and cm.traversable[j, i]) or not self._los((px, py), target):
                 continue
+            if self.belief.heat[j, i] >= NO_STAY:  # it hovers there: under the 70 °C limit
+                continue
             c = df.cost[j, i] if df else 0.0
             if c < bc:
                 best, bc = (px, py), c
@@ -315,8 +328,8 @@ class Hazards:
         hot_c = config.HEAT_RETREAT_C - config.AMBIENT_C
         for i, j in self._disc(*est, WARM_M):
             cx, cy = self.belief.cell_center(i, j)
-            norm = min(HEAT_NORM_MAX, HEAT_PEAK_C * math.exp(-((cx - est[0]) ** 2 + (cy - est[1]) ** 2)
-                                                            / (2 * HEAT_SIGMA_M ** 2)) / hot_c)
+            norm = min(SUSPECT_NORM_MAX, HEAT_PEAK_C * math.exp(-((cx - est[0]) ** 2 + (cy - est[1]) ** 2)
+                                                               / (2 * HEAT_SIGMA_M ** 2)) / hot_c)
             if norm > 0.02:
                 self.belief.heat[j, i] = max(self.belief.heat[j, i], norm)
         self.belief.version += 1

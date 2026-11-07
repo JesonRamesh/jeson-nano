@@ -235,6 +235,10 @@ class Replay:
 
     def _run(self, step: dict[str, Any]) -> None:
         do, bus, t = step["do"], self.loop.bus, self.loop.t
+        if self._click is not None and do in ("click", "undo", "act2", "reset"):  # moving on before it was seen
+            c = self._click
+            self._fail_click(f"click at ({c['x']:.1f}, {c['y']:.1f}) not noticed before the next step ({do}, "
+                             f"after {t - c['t']:.1f} s)")
         note = ""
         if do == "click":
             x, y = step.get("x"), step.get("y")

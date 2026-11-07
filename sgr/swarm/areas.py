@@ -28,7 +28,13 @@ class Area:
     n_cells: int
 
     def unsearched(self, belief: BeliefGrid) -> np.ndarray:
-        return self.mask & ~belief.searched
+        """Left to search: not seen yet, still reachable on the belief (rooms cut off by debris drop out)
+        and not a dead end a drone already gave up on."""
+        return self.mask & ~belief.searched & belief.reachable_now() & ~belief.dead
+
+    def cut_off(self, belief: BeliefGrid) -> int:
+        """Cells of this area the swarm can no longer reach (behind new debris)."""
+        return int((self.mask & belief.reachable & ~belief.reachable_now() & ~belief.searched).sum())
 
     def unsearched_fraction(self, belief: BeliefGrid) -> float:
         return float(self.unsearched(belief).sum()) / max(1, self.n_cells)

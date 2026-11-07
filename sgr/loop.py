@@ -53,6 +53,7 @@ GUIDANCE_HOT_C = 60.0  # at/above this the swarm (not Guidance) moves the drone:
 GUIDANCE_COOL_C = 45.0  # ... and keeps it until it has cooled below this
 RESYNC_S = 5.0  # wall seconds between full belief-map resyncs (late-joining browsers catch up)
 FLARE_NEAR_M = 3.7  # flare-up hits the drone nearest a fire if this close: the watcher AT its post (3.3 m)
+FLARE_CORRIDOR_M = 3.0  # never flare a drone this close to a corridor (its > 150 °C core would seal it for drones)
 FLARE_FALLBACK_M = 6.0  # after the wait: the drone nearest a fire if this close, else no flare-up
 FLARE_MAX_WAIT_S = 30.0  # flare.t is a "not before": wait this long for a drone to be near a fire
 _WAIT = "__wait__"  # _flare_victim(): nobody near a fire yet, keep the flare pending
@@ -246,6 +247,11 @@ class SimLoop:
             p = self.world.drone_pose(d)
             return min(math.hypot(p.x - f.x, p.y - f.y) for f in fires)
 
+        # never a drone in a corridor (the scenario graph is public structure): a fire there could cut the
+        # only way to the survivor for good (no Undo for a flare-up)
+        alive = [d for d in alive if self._corridor_dist(d) >= FLARE_CORRIDOR_M]
+        if not alive:
+            return _WAIT if waited < FLARE_MAX_WAIT_S else None
         best = min(alive, key=dist)
         if dist(best) <= FLARE_NEAR_M:
             return best
@@ -255,6 +261,12 @@ class SimLoop:
             return best
         print(f"sgr: flare-up skipped: no drone within {FLARE_FALLBACK_M:.0f} m of a fire after {waited:.0f} s")
         return None  # a flare-up far from the fires could cut the only route: skip the beat instead
+
+    def _corridor_dist(self, drone: str) -> float:
+        from sgr.swarm.rescue import _seg_dist, through_edges  # same rule as the swarm's watch posts
+
+        p = self.world.drone_pose(drone)
+        return min((_seg_dist((p.x, p.y), a, b) for a, b in through_edges(self.scenario.graph)), default=math.inf)
 
     def _submit_frame(self, drone: str, pose: Pose) -> None:
         self._frame_seq += 1

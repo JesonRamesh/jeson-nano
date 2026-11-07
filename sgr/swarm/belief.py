@@ -35,6 +35,10 @@ class BeliefGrid:
         self.searched = np.zeros(wall.shape, bool)
         self.heat = np.zeros(wall.shape, np.float32)  # 0..1, filled by later blocks
         self.version = 0  # bumped on every state change (planner caches key on it)
+        self.now = 0.0  # sim time (set by the swarm each tick; dead-end marks are stamped with it)
+        self.open_version = 0  # bumped only when the map OPENS up (debris / fire gone): dead ends get a re-try
+        self.dead = np.zeros(wall.shape, bool)  # shared: cells a drone looked for and could not see (dead ends)
+        self.dead_t = np.full(wall.shape, -np.inf, np.float32)  # when each was marked (they expire: see swarm)
         self._delta: dict[tuple[int, int], CellState] = {}
         self._searched_delta: list[tuple[int, int]] = []
         self._hits: dict[tuple[str, int, int], int] = {}  # (drone, i, j) -> consecutive "shorter" scans
@@ -79,6 +83,8 @@ class BeliefGrid:
         c = CODE[s]
         if self.state[j, i] == c:
             return False
+        if self.state[j, i] in (BLOCKED, FIRE) and c not in (BLOCKED, FIRE):
+            self.open_version += 1  # an obstacle went away (Undo): what was cut off may be reachable now
         self.state[j, i] = c
         self._delta[(i, j)] = s
         self.version += 1
