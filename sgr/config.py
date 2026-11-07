@@ -31,3 +31,10 @@ FF_SPEED = 1.4  # m/s
 OLLAMA_URL = "http://localhost:11434/api/chat"
 GEMMA_MODEL_TAG = "gemma4:e4b"  # hour-1 bench: 26/30 correct
 GEMMA_TIMEOUT_S = 8.0  # measured p95 6.3 s on the demo laptop
+
+# Swarm rules when unsure (§8.4)
+HEAT_RETREAT_C = 70.0  # temp above this -> RETREAT 3 m
+HEAT_DANGER_C = 50.0  # temp above this -> mark `danger` cells around the drone
+AMBIENT_C = 20.0  # for heat_norm in the planner cost
+INSPECT_STANDOFF_M = 2.0  # re-look from ~2 m in front of the target, facing it
+MAX_RELOOKS = 2
