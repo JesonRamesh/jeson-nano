@@ -7,6 +7,7 @@ import { Sparkles } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useMemo, useRef } from 'react'
 import * as THREE from 'three'
+import { SIM_ASSETS, SimParts } from '../SimShapes'
 import { rng } from './hazards'
 import { glow, scorch, smokePuff, softDot } from './textures'
 
@@ -154,6 +155,8 @@ export function FireFX({ x, y, size = 1.5, smoke = true }: { x: number; y: numbe
   const scorchSize = 2.8 * s
   return (
     <group position={[x, y, 0]}>
+      {/* the same flame tongues / embers / smoke the MuJoCo drone cameras render (shared spec) */}
+      <SimParts parts={SIM_ASSETS.fire.parts} flicker phase={seed} />
       <mesh position={[0, 0, 0.012]} renderOrder={1}>
         <planeGeometry args={[scorchSize, scorchSize]} />
         <meshBasicMaterial map={scorch()} transparent depthWrite={false} polygonOffset polygonOffsetFactor={-2} />

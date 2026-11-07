@@ -8,7 +8,7 @@ import { placeClick, undoClick, type ClickMode } from '../dashboard/clickTool'
 import { useFreeGrid, type FreeGrid } from '../state/grid'
 import { BELIEF_LEGEND, paintBelief } from '../state/beliefPaint'
 import { sim, useSim, type SimEventMsg } from '../state/store'
-import { DEBRIS_SIZE } from './constants'
+import { SimDebrisBlock, SimFire, SimSurvivor } from './SimShapes'
 import { Dressing } from './dressing'
 import { mergeWalls } from './walls'
 
@@ -271,35 +271,17 @@ function Drones() {
 }
 
 function FireCluster({ x, y }: { x: number; y: number }) {
+  // Only when the dressing is off (W's FireFX draws fires otherwise). Same shapes as the drone cameras.
   const light = useRef<THREE.PointLight>(null)
-  const mats = useRef<THREE.MeshStandardMaterial[]>([])
   const seed = x * 12.9898 + y * 78.233 // stable per-fire flicker phase
   useFrame(({ clock }) => {
     const t = clock.elapsedTime + seed
-    const f = 0.75 + 0.25 * Math.sin(t * 13) * Math.sin(t * 7.3)
-    if (light.current) light.current.intensity = 6 * f
-    mats.current.forEach((m, i) => m && (m.emissiveIntensity = 2.2 * (0.8 + 0.2 * Math.sin(t * 9 + i))))
+    if (light.current) light.current.intensity = 6 * (0.75 + 0.25 * Math.sin(t * 13) * Math.sin(t * 7.3))
   })
-  const cones: [number, number, number][] = [
-    [0, 0, 0.9],
-    [0.3, 0.15, 0.6],
-    [-0.25, 0.2, 0.7],
-    [0.05, -0.3, 0.55],
-  ]
   return (
-    <group position={[x, y, 0]}>
-      {cones.map(([dx, dy, hgt], i) => (
-        <mesh key={i} position={[dx, dy, hgt / 2]} rotation={[Math.PI / 2, 0, 0]}>
-          <coneGeometry args={[0.22, hgt, 12]} />
-          <meshStandardMaterial
-            ref={(m) => void (m && (mats.current[i] = m))}
-            color="#ffb300"
-            emissive="#ff6d00"
-            emissiveIntensity={2.2}
-          />
-        </mesh>
-      ))}
-      <pointLight ref={light} position={[0, 0, 1]} color="#ff8a1f" intensity={6} distance={6} />
+    <group>
+      <SimFire x={x} y={y} />
+      <pointLight ref={light} position={[x, y, 1]} color="#ff8a1f" intensity={6} distance={6} />
     </group>
   )
 }
@@ -307,12 +289,7 @@ function FireCluster({ x, y }: { x: number; y: number }) {
 function Debris({ h }: { h: Handle }) {
   // The handle has no yaw; derive a stable small rotation from its id ("slightly rotated").
   const yaw = useMemo(() => ((h.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 21) - 10) * (Math.PI / 180), [h.id])
-  return (
-    <mesh position={[h.x, h.y, DEBRIS_SIZE.z / 2]} rotation={[0, 0, yaw]}>
-      <boxGeometry args={[DEBRIS_SIZE.x, DEBRIS_SIZE.y, DEBRIS_SIZE.z]} />
-      <meshStandardMaterial color="#6d5a4b" roughness={1} />
-    </mesh>
-  )
+  return <SimDebrisBlock x={h.x} y={h.y} yaw={yaw} />
 }
 
 // W's disaster dressing (<Dressing />) draws flames for click fires and rubble around click
@@ -441,20 +418,10 @@ function Routes() {
 }
 
 function SurvivorMarker() {
+  // The same hi-vis figure the drone cameras see. The belief has no heading, so it lies along x.
   const s = useSim((st) => st.state?.survivor)
   if (!s || s.x == null || s.y == null || s.status === 'unknown') return null
-  return (
-    <mesh position={[s.x, s.y, 0.2]}>
-      <capsuleGeometry args={[0.18, 1.2, 6, 12]} />
-      <meshStandardMaterial
-        color="#d4ff3d"
-        emissive="#9ccc00"
-        emissiveIntensity={s.status === 'confirmed' ? 0.8 : 0.3}
-        transparent
-        opacity={s.status === 'confirmed' ? 1 : 0.6}
-      />
-    </mesh>
-  )
+  return <SimSurvivor x={s.x} y={s.y} opacity={s.status === 'confirmed' ? 1 : 0.6} />
 }
 
 // ---------------------------------------------------------------- camera
