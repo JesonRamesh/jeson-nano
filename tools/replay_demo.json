@@ -7,7 +7,8 @@
     "chain_formed",
     "REPLAN",
     "chain_ready",
-    "MISSION_COMPLETE"
+    "MISSION_COMPLETE",
+    "summary"
   ],
   "steps": [
     {
@@ -31,6 +32,18 @@
       "after": "prev",
       "wait": 0.5,
       "do": "ff_autopilot"
+    },
+    {
+      "after": "prev",
+      "wait": 15,
+      "do": "click",
+      "mode": "debris",
+      "ahead_of_ff": 5
+    },
+    {
+      "after": "prev",
+      "wait": 8,
+      "do": "undo"
     },
     {
       "after": "MISSION_COMPLETE",

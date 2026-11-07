@@ -8,6 +8,9 @@
 - Chain: route -> RDP -> turn points (> 35°). D_survivor hovers over the survivor, D_lead goes to the
   entrance to meet the firefighter, any other drone takes the largest turns as a sentinel (yaw sweep).
   Rebuilt when the route changes or a drone is lost.
+- Act 2 (the firefighter's tracked position `ff` is known): re-plans start at the firefighter, only
+  blockages AHEAD of them on the route count, the lead is the drone nearest the firefighter and
+  sentinels take the turns still ahead (§9 "Route becomes unsafe").
 """
 
 from __future__ import annotations
@@ -27,7 +30,8 @@ from .trace import Trace
 
 ROUTE_MARGIN_M = 0.5  # new blocked/fire cell this close to the route -> re-plan
 SAME_ROUTE_LEN_M = 0.5  # a re-plan this close in length ...
-SAME_ROUTE_DEV_M = 0.6  # ... and never further than this from the old line is the same route (no REPLAN row)
+SAME_ROUTE_SKIP_M = 1.5  # ignore the start of a re-plan when comparing (it starts at the firefighter)
+SAME_ROUTE_DEV_M = 1.5  # ... and never further than this from the old line is the same route (equal-cost lanes in open halls are ~1 m apart)
 OLD_ROUTE_S = 6.0
 NO_ROUTE_RECHECK_S = 2.0
 WATCH_M = 3.3  # fire-watch distance: ~55 °C on the heat model, under the 70 °C retreat limit
@@ -56,11 +60,13 @@ class Rescue:
     _next_check: float = 0.0
     _chain_key: tuple | None = None
     _chain_t: float | None = None  # when the chain formed
+    ff: Pt | None = None  # Act 2: the firefighter's tracked position (None in Act 1)
 
     # ------------------------------------------------------------------ inputs
     def on_new_cells(self, sensor: str, drone: str, cells: list[tuple[int, int]]) -> None:
-        """New blocked_new / fire cells this tick: re-plan if they touch the route."""
-        if self.path and self.bb.route.status == "ok" and path_hits(self.path, cells, self.belief, ROUTE_MARGIN_M):
+        """New blocked_new / fire cells this tick: re-plan if they touch the route (Act 2: the route ahead)."""
+        if self.path and self.bb.route.status == "ok" and path_hits(self._ahead(self.path), cells, self.belief,
+                                                                    ROUTE_MARGIN_M):
             xs = [self.belief.cell_center(i, j) for i, j in cells]
             xy = (float(np.mean([p[0] for p in xs])), float(np.mean([p[1] for p in xs])))
             self._pending = (sensor, drone, cells, xy)
@@ -100,7 +106,8 @@ class Rescue:
     # ------------------------------------------------------------------ route
     def _plan(self, t: float, target: Pt, first: bool = False) -> None:
         old = self.bb.route
-        new = astar(self.belief, self.entrance, target, drone=False)  # firefighter route: §8.3 costs
+        start = self.ff if self.ff is not None else self.entrance
+        new = astar(self.belief, start, target, drone=False)  # firefighter route: §8.3 costs
         if new is None:
             self._next_check = t + NO_ROUTE_RECHECK_S
             if old.status != "none":
@@ -110,19 +117,20 @@ class Rescue:
                 self.path = None
                 why = self._why()
                 self.trace.log(t, "swarm", "NO_ROUTE", f"No safe route to the survivor{why}. Holding.",
-                               self._evidence(fallback={"from": list(self.entrance), "to": list(target)}))
+                               self._evidence(fallback={"from": [round(start[0], 2), round(start[1], 2)],
+                                                        "to": list(target)}))
                 self.bb.event("no_route", xy=target)
             return
         length = path_length(new)
         pts = [(round(x, 2), round(y, 2)) for x, y in rdp(new, 0.1)]
-        if not first and old.status == "ok" and self.path and self._same_route(self.path, new):
+        if not first and old.status == "ok" and self.path and self._same_route(self._ahead(self.path), new):
             self.path = new  # more cells of an obstacle we already avoid: refresh quietly, keep the version
             self.bb.route = Route(points=pts, status="ok", version=old.version)
             return
         if not first:  # the first plan is not a re-plan (the chain rows follow it)
             if old.points:
                 self.bb.old_routes.append(OldRoute(points=old.points, until=t + OLD_ROUTE_S))
-            before = path_length(self.path) if self.path else None
+            before = path_length(self._ahead(self.path)) if self.path else None
             delta = f" ({length - before:+.1f} m)" if before else ""
             reason = (f"Route blocked{self._why()}: new route {length:.1f} m{delta}" if old.status == "ok"
                       else f"Safe route found again: {length:.1f} m")
@@ -132,12 +140,22 @@ class Rescue:
         self.path = new
         self.bb.route = Route(points=pts, status="ok", version=old.version + 1)
 
+    def _ahead(self, path: list[Pt]) -> list[Pt]:
+        """The part of `path` still ahead of the firefighter (all of it in Act 1)."""
+        if self.ff is None or len(path) < 2:
+            return path
+        pts = np.asarray(path)
+        k = int(np.argmin(np.hypot(pts[:, 0] - self.ff[0], pts[:, 1] - self.ff[1])))
+        return path[k:] if len(path) - k >= 2 else path[-2:]
+
     @staticmethod
     def _same_route(old: list[Pt], new: list[Pt]) -> bool:
         if abs(path_length(new) - path_length(old)) >= SAME_ROUTE_LEN_M:
             return False
         o = np.asarray(old)
-        dev = max(float(np.min(np.hypot(o[:, 0] - x, o[:, 1] - y))) for x, y in new)
+        # the first metres always differ in Act 2 (the firefighter is rarely exactly on the line)
+        tail = [q for q in new if math.dist(q, new[0]) > SAME_ROUTE_SKIP_M] or new[-1:]
+        dev = max(float(np.min(np.hypot(o[:, 0] - x, o[:, 1] - y))) for x, y in tail)
         return dev < SAME_ROUTE_DEV_M
 
     def _why(self) -> str:
@@ -160,22 +178,25 @@ class Rescue:
         if key == self._chain_key or not cands or not self.path:
             return
         self._chain_key = key
-        simp = rdp(self.path, 0.3)
+        simp = rdp(self._ahead(self.path), 0.3)  # Act 2: only turns still ahead of the firefighter
         turns = sorted(turn_points(simp, TURN_DEG), key=lambda tp: -tp[1])
 
         def near(p: Pt):
             return lambda d: math.hypot(alive[d].x - p[0], alive[d].y - p[1])
 
         free = list(cands)
-        keep = [d for d in free if d in self.roles]  # prefer drones already in the chain (less shuffling)
-        surv = min(keep or free, key=near(target)) if keep and self.roles.get(min(keep, key=near(target))) == "survivor"             else min(free, key=near(target))
+        # the drone already over the survivor stays there (less shuffling); otherwise the nearest one
+        holder = next((d for d, r in self.roles.items() if r == "survivor" and d in free), None)
+        surv = holder or min(free, key=near(target))
         free.remove(surv)
         plan: list[tuple[str, str, Pt, dict]] = [(surv, "survivor", target, {"task": "over the survivor"})]
         if free:
-            lead = min(free, key=near(self.entrance))
+            meet = self.ff if self.ff is not None else self.entrance  # Act 2: lead with the firefighter
+            lead = min(free, key=near(meet))
             free.remove(lead)
             face = self.path[min(5, len(self.path) - 1)]
-            plan.append((lead, "lead", self.entrance, {"face": face, "task": "lead: meet the firefighter"}))
+            task = "lead: guiding the firefighter" if self.ff is not None else "lead: meet the firefighter"
+            plan.append((lead, "lead", meet, {"face": face, "task": task}))
         # sentinels: largest turns first (nearest free drone each); spare drones go to the route's midpoint
         for k in range(max(0, CHAIN_MAX - len(plan))):
             if not free:

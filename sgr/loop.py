@@ -41,6 +41,7 @@ from sgr.contracts import (
     Scenario,
     SnapshotMsg,
     StateMsg,
+    SummaryMsg,
     SwarmState,
     TraceMsg,
     TraceRow,
@@ -94,6 +95,8 @@ class SimLoop:
         self._act2_saved = False
         self.last_snapshot: Path | None = None
         self._reanchor = False  # set when sim time jumps or the speed changes (run() re-paces)
+        self._act2_t: float | None = None
+        self.summary: SummaryMsg | None = None
 
     # ------------------------------------------------------------------
     def run(self, max_ticks: int | None = None) -> None:
@@ -157,7 +160,8 @@ class SimLoop:
         for det in detections:
             self._publish(_detection_msg(det))
         # 5 swarm
-        cmds, rows, self.swarm_state = self.swarm.tick(self.t, readings, detections)
+        ff = w.ff_pose() if self.act == 2 else None  # Act 2: the firefighter's tracker feeds the re-route
+        cmds, rows, self.swarm_state = self.swarm.tick(self.t, readings, detections, ff=ff)
         # the swarm asks for a closer look only once a drone is ~2 m in front of the target (§8.4)
         for det_id in self.swarm_state.relook_requests:
             self.perception.request_relook(det_id)
@@ -183,6 +187,9 @@ class SimLoop:
         for row in rows:
             self.trace.append(row)
             self._publish(TraceMsg(**row.model_dump()))
+            if row.action == "MISSION_COMPLETE" and self.act == 2:
+                self.summary = self._summary()
+                self._publish(self.summary)
         for ev in self.swarm_state.events:
             self._publish(ev)
         ss = self.swarm_state
@@ -308,6 +315,9 @@ class SimLoop:
             return False
         if act is not None:
             self.act = act
+        if self.act == 2:
+            self._act2_t = self.t  # Act 2 clock for the summary
+            self.summary = None
         if name == "act2_start":
             self._act2_saved = True  # don't overwrite it from the replayed chain
         print(f"sgr: snapshot '{name}' loaded -> t={self.t:.1f}s act {self.act}")
@@ -327,6 +337,20 @@ class SimLoop:
             self._publish(TraceMsg(**row.model_dump()))
         self._last_resync = -math.inf  # full map on the next tick
         self._last_state_pub = -math.inf
+
+    def _summary(self) -> SummaryMsg:
+        """§9 summary screen: Act 2 time, distance walked, hazards avoided, corrections, re-plans."""
+        stats = self.guidance.stats() if self.guidance is not None and hasattr(self.guidance, "stats") else {}
+        hazards = getattr(getattr(self.swarm, "bb", None), "hazards", {})
+        return SummaryMsg(
+            time_s=round(self.t - (self._act2_t or 0.0), 1),
+            distance_m=float(stats.get("walked_m", 0.0)),
+            hazards_avoided=sum(1 for h in hazards.values() if h.kind in ("fire", "blocked")),
+            corrections=int(stats.get("corrections", 0)),
+            replans=sum(1 for r in self.trace  # route re-plans during the firefighter's walk
+                        if r.action == "REPLAN" and r.drone == "swarm" and r.t >= (self._act2_t or 0.0)),
+            trace_url=None,  # no trace-file endpoint yet: the full trace is the dashboard's trace list
+        )
 
     def _publish_full_map(self) -> None:
         """Every non-free belief cell + every searched cell (map_delta is additive in the browser)."""

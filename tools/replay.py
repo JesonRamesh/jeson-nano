@@ -26,7 +26,8 @@ Script (JSON):
 Triggers: "t" = sim time; "after" = an event kind (chain_formed, replan, drone_lost, ...), a trace action
 (SURVIVOR_CONFIRMED, ...), a swarm phase (chain_ready = chain drones at their posts, no_route) or "prev"
 (when the previous step ran); "wait" = sim seconds after that.
-Actions: click (x/y, or on_route = fraction 0..1 along the current route), undo, act2, reset, speed,
+Actions: click (x/y, on_route = fraction 0..1 along the current route, or ahead_of_ff = metres ahead of
+the firefighter along the route), undo, act2, reset, speed,
 save (name), ff_input (fwd/strafe/yaw), ff_autopilot (the firefighter follows the guidance arrow), stop.
 Exit code 1 if an expected beat never happened, or a step never ran.
 """
@@ -55,6 +56,7 @@ from sgr.contracts import (  # noqa: E402
     PriorMap,
     Scenario,
     SnapshotMsg,
+    SummaryMsg,
     TraceMsg,
     UndoMsg,
 )
@@ -66,7 +68,8 @@ from sgr.swarm import Swarm  # noqa: E402
 DEFAULT_SCRIPT: dict[str, Any] = {
     "map": "maps/marshgate-route",
     "max_t": 320,
-    "expect": ["SURVIVOR_CONFIRMED", "CHAIN_POSITION", "chain_formed", "REPLAN", "chain_ready", "MISSION_COMPLETE"],
+    "expect": ["SURVIVOR_CONFIRMED", "CHAIN_POSITION", "chain_formed", "REPLAN", "chain_ready", "MISSION_COMPLETE",
+               "summary"],
     "steps": [
         # the judge's change tool: debris on the route once the chain holds, then Undo
         {"after": "chain_formed", "wait": 8, "do": "click", "mode": "debris", "on_route": 0.55},
@@ -74,6 +77,9 @@ DEFAULT_SCRIPT: dict[str, Any] = {
         # Act 2 from the snapshot (saved once the chain is at its posts), the firefighter walks the arrow
         {"after": "chain_ready", "wait": 3, "do": "act2"},
         {"after": "prev", "wait": 0.5, "do": "ff_autopilot"},
+        # §9 "Route becomes unsafe": debris lands ahead of the walking firefighter, then the judge undoes it
+        {"after": "prev", "wait": 15, "do": "click", "mode": "debris", "ahead_of_ff": 5},
+        {"after": "prev", "wait": 8, "do": "undo"},
         {"after": "MISSION_COMPLETE", "wait": 3, "do": "stop"},
     ],
 }
@@ -110,7 +116,13 @@ class Replay:
             if self.verbose and msg.action in KEY_ACTIONS and msg.t >= t - 1.0:  # not the history re-sent on a load
                 self._say(f"{msg.t:7.1f}  {msg.drone:5} {msg.action:18} {msg.reason}")
         elif isinstance(msg, GuidanceMsg):
+            if self.verbose and msg.say and (self.guidance is None or msg.say != self.guidance.say):
+                self._say(f"{t:7.1f}  VOICE “{msg.say}”")
             self.guidance = msg
+        elif isinstance(msg, SummaryMsg):
+            self.happened.setdefault("summary", t)
+            self._say(f"{t:7.1f}  SUMMARY {msg.time_s:.0f} s, walked {msg.distance_m:.0f} m, "
+                      f"{msg.hazards_avoided} hazards avoided, {msg.corrections} corrections, {msg.replans} re-plans")
         self._orig_publish(msg)
 
     def _say(self, line: str) -> None:
@@ -168,7 +180,16 @@ class Replay:
         note = ""
         if do == "click":
             x, y = step.get("x"), step.get("y")
-            if "on_route" in step:
+            if "ahead_of_ff" in step:  # Act 2: N metres ahead of the firefighter along the route
+                pts = self.loop.swarm_state.route.points if self.loop.swarm_state else []
+                if len(pts) < 2:
+                    self._say(f"{t:7.1f}  REPLAY click skipped: no route yet")
+                    self.prev_t = t
+                    return
+                ff = self.loop.world.ff_pose()
+                dx, dy = _lookahead(pts, (ff.x, ff.y), float(step["ahead_of_ff"]))
+                x, y = ff.x + dx, ff.y + dy
+            elif "on_route" in step:
                 pts = self.loop.swarm_state.route.points if self.loop.swarm_state else []
                 if len(pts) < 2:
                     self._say(f"{t:7.1f}  REPLAY click skipped: no route yet")

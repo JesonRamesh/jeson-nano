@@ -22,7 +22,7 @@ def test_default_demo_script_runs_end_to_end(test_map, tmp_path, capsys) -> None
                         "--snapshots", str(tmp_path)])
     out = capsys.readouterr().out
     assert code == 0, out
-    for beat in ("SURVIVOR_CONFIRMED", "chain_ready", "MISSION_COMPLETE"):
+    for beat in ("SURVIVOR_CONFIRMED", "chain_ready", "MISSION_COMPLETE", "summary"):
         assert f"ok   {beat}" in out
     assert "REPLAY click" in out and "REPLAY undo" in out and "REPLAY act2" in out
     assert (tmp_path / "act2_start.pkl").is_file()
