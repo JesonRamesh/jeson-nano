@@ -4,9 +4,11 @@ import type {
   CellState,
   DetectionMsg,
   EventMsg,
+  GuidanceMsg,
   HelloMsg,
   ServerMsg,
   StateMsg,
+  SummaryMsg,
   TraceRow,
 } from '../contracts'
 
@@ -57,6 +59,8 @@ export interface Snapshot {
   budget: BudgetMsg | null
   budgetAt: number // performance.now() when the last budget arrived
   events: SimEvent[] // most recent last, capped
+  guidance: GuidanceMsg | null // Act 2: latest firefighter guidance
+  summary: SummaryMsg | null // end of Act 2
 }
 
 const TRACE_CAP = 1000
@@ -70,7 +74,7 @@ const SURVIVOR_CUE_GAP_MS = 30_000
  * the map canvas reads it directly and watches `belief.version`.
  */
 class SimStore {
-  snap: Snapshot = { hello: null, state: null, trace: [], detections: {}, budget: null, budgetAt: 0, events: [] }
+  snap: Snapshot = { hello: null, state: null, trace: [], detections: {}, budget: null, budgetAt: 0, events: [], guidance: null, summary: null }
   belief: BeliefGrid | null = null
   /** Latest detection per frame_id, for drawing boxes on trace evidence frames. */
   detectionsByFrame = new Map<string, DetectionMsg>()
@@ -106,7 +110,7 @@ class SimStore {
           version: 0,
         }
         // New session (server restart / reconnect): drop old per-run data.
-        this.set({ hello: msg, state: null, trace: [], detections: {}, events: [] })
+        this.set({ hello: msg, state: null, trace: [], detections: {}, events: [], guidance: null, summary: null })
         this.detectionsByFrame.clear()
         this.survivorFound = false
         this.lastCue.clear()
@@ -139,6 +143,12 @@ class SimStore {
       case 'event':
         if (msg.kind === 'survivor_found') this.survivorFound = true
         this.pushEvent({ kind: msg.kind, drone: msg.drone, xy: msg.xy })
+        break
+      case 'guidance':
+        this.set({ guidance: msg })
+        break
+      case 'summary':
+        this.set({ summary: msg })
         break
       default:
         break // guidance / summary: Act 2 (Day 2)

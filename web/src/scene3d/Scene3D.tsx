@@ -23,7 +23,7 @@ const NO_DRONES: { id: string; colour: string }[] = []
 type CamMode = 'auto' | 'overview' | 'free' | string // string = drone id (chase)
 
 /** Renders at most `fps` frames per second (with frameloop="demand"); stops when the tab is hidden. */
-function FrameCap({ fps }: { fps: number }) {
+export function FrameCap({ fps }: { fps: number }) {
   const invalidate = useThree((s) => s.invalidate)
   useEffect(() => {
     const id = setInterval(() => {
@@ -34,7 +34,7 @@ function FrameCap({ fps }: { fps: number }) {
   return null
 }
 
-function SimFrame({ children }: { children: ReactNode }) {
+export function SimFrame({ children }: { children: ReactNode }) {
   return <group rotation={[-Math.PI / 2, 0, 0]}>{children}</group>
 }
 
@@ -115,7 +115,7 @@ class Fallback extends Component<{ fallback: ReactNode; children: ReactNode }, {
   }
 }
 
-function Environment() {
+export function Environment() {
   const hello = useSim((s) => s.hello)
   const grid = useFreeGrid(hello?.map.grid_url, hello?.map.resolution)
   if (!hello) return null
@@ -229,7 +229,7 @@ function GlbBody({ id, colour, url }: { id: string; colour: string; url: string 
 }
 
 /** Drones: model (or glowing sphere) per drone, positions smoothed between 10 Hz state updates. */
-function Drones() {
+export function Drones() {
   const hello = useSim((s) => s.hello)
   const ids = hello?.drones ?? NO_DRONES
   const refs = useRef<Record<string, THREE.Group | null>>({})
@@ -323,7 +323,7 @@ const DRESSING_OFF = new URLSearchParams(window.location.search).get('dressing')
  * MuJoCo debris the drones see (W's rubble sits around its base). Fire: W's FireFX, or our
  * cones when the dressing is off. Re-renders only when the set of handles changes.
  */
-function ClickObjects() {
+export function ClickObjects() {
   const key = useSim((s) => (s.state?.click_handles ?? []).map((h) => h.id).join(','))
   const handles = useMemo(() => sim.snap.state?.click_handles ?? [], [key]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
@@ -362,7 +362,7 @@ function ClickFloor({ mode, onPlace }: { mode: ClickMode | null; onPlace: (x: nu
   )
 }
 
-function Routes() {
+export function Routes() {
   const route = useSim((s) => s.state?.route)
   const old = useSim((s) => s.state?.old_routes)
   const cps = useSim((s) => s.state?.checkpoints)
@@ -396,7 +396,7 @@ function Routes() {
   )
 }
 
-function SurvivorMarker() {
+export function SurvivorMarker() {
   // W's low-poly survivor figure (a hi-vis capsule while it loads). The belief has no
   // heading, so it lies along x. Faded until the swarm has confirmed it.
   const s = useSim((st) => st.state?.survivor)
@@ -423,7 +423,7 @@ function SurvivorMarker() {
 }
 
 /** Act 2: the firefighter, from state.ff. Walks (bob + sway) while moving faster than 0.2 m/s. */
-function FirefighterMarker() {
+export function FirefighterMarker() {
   const ff = useSim((st) => st.state?.ff)
   const last = useRef<{ x: number; y: number; t: number } | null>(null)
   const [moving, setMoving] = useState(false)
@@ -523,7 +523,8 @@ function CameraRig({ mode, onShot }: { mode: CamMode; onShot: (shot: string) => 
   // firefighter view owns WASD there).
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (isTyping(e) || document.pointerLockElement) return
+      // Act 2: the firefighter view owns WASD
+      if (isTyping(e) || document.pointerLockElement || sim.snap.state?.act === 2) return
       const k = e.key.toLowerCase()
       if (k.length === 1 && WASD_KEYS.includes(k)) {
         keys.current.add(k)
@@ -655,7 +656,8 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
       if (k === '1') setClickMode((m) => (m === 'debris' ? null : 'debris'))
       if (k === '2') setClickMode((m) => (m === 'fire' ? null : 'fire'))
       if (k === 'u') undoClick(send)
-      if (k.length === 1 && WASD_KEYS.includes(k)) setMode((m) => (m === 'overview' || m === 'free' ? m : 'free'))
+      if (k.length === 1 && WASD_KEYS.includes(k) && sim.snap.state?.act !== 2)
+        setMode((m) => (m === 'overview' || m === 'free' ? m : 'free'))
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
