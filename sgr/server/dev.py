@@ -43,7 +43,7 @@ def main() -> None:
         world = World(args.map, scenario)
         loop = SimLoop(
             world,
-            Perception(mode="mock", ground_truth=world.ground_truth),
+            Perception(mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight),
             Swarm(PriorMap.from_map(args.map, scenario), list(scenario.drones.ids)),
             scenario,
             guidance=Guidance(),
