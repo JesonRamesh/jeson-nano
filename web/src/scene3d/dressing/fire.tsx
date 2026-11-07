@@ -1,11 +1,14 @@
 // Fire: flame particles, a smoke column, embers, a flickering light and a scorch mark.
 // Sim frame (z up), placed at the fire's (x, y) on the floor. All GPU-animated.
+// The dashboard draws the scan UNLIT (baked photo lighting), so the point light only
+// reaches lit things (rubble, drones); the firelight on the building is faked with an
+// orange-tinted floor pool + a soft halo that flicker with the light.
 import { Sparkles } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { rng } from './hazards'
-import { scorch, smokePuff, softDot } from './textures'
+import { glow, scorch, smokePuff, softDot } from './textures'
 
 const VERT = /* glsl */ `
   attribute vec4 aSeed;            // phase, angle, radius, speed
@@ -61,7 +64,7 @@ const SMOKE_FRAG = /* glsl */ `
   varying float vLife;
   void main() {
     float a = texture2D(uTex, gl_PointCoord).a * smoothstep(0.5, 0.25, length(gl_PointCoord - 0.5));
-    vec3 c = mix(vec3(0.42, 0.33, 0.26), vec3(0.27, 0.26, 0.26), smoothstep(0.0, 0.4, vLife)); // fire-lit near the base
+    vec3 c = mix(vec3(0.36, 0.27, 0.2), vec3(0.17, 0.16, 0.16), smoothstep(0.0, 0.4, vLife)); // fire-lit near the base
     float alpha = a * uOpacity * smoothstep(0.0, 0.15, vLife) * (1.0 - smoothstep(0.6, 1.0, vLife));
     gl_FragColor = vec4(c, alpha);
   }
@@ -88,6 +91,8 @@ export function FireFX({ x, y, size = 1.5, smoke = true }: { x: number; y: numbe
   const seed = Math.round(x * 131 + y * 71)
   const { size: view, camera } = useThree()
   const light = useRef<THREE.PointLight>(null)
+  const pool = useRef<THREE.MeshBasicMaterial>(null)
+  const halo = useRef<THREE.SpriteMaterial>(null)
 
   const flame = useMemo(() => {
     const geo = seeds(Math.round(140 * s), seed, [0.9, 1.6])
@@ -120,11 +125,11 @@ export function FireFX({ x, y, size = 1.5, smoke = true }: { x: number; y: numbe
         uTime: { value: 0 },
         uPx: { value: 500 },
         uHeight: { value: 5.5 },
-        uCeil: { value: 2.45 },
+        uCeil: { value: 2.15 }, // below the dashboard's 2.3 m dollhouse cut
         uRadius: { value: 0.3 * s },
         uPart: { value: 0.9 * s },
         uTex: { value: smokePuff() },
-        uOpacity: { value: 0.28 },
+        uOpacity: { value: 0.5 },
       },
       transparent: true,
       depthWrite: false,
@@ -140,10 +145,10 @@ export function FireFX({ x, y, size = 1.5, smoke = true }: { x: number; y: numbe
       m.uniforms.uTime.value = t
       m.uniforms.uPx.value = px
     }
-    if (light.current) {
-      const f = 0.72 + 0.18 * Math.sin(t * 11 + seed) * Math.sin(t * 6.7) + 0.1 * Math.sin(t * 23)
-      light.current.intensity = 9 * s * f
-    }
+    const f = 0.72 + 0.18 * Math.sin(t * 11 + seed) * Math.sin(t * 6.7) + 0.1 * Math.sin(t * 23)
+    if (light.current) light.current.intensity = 9 * s * f
+    if (pool.current) pool.current.opacity = 0.55 * f
+    if (halo.current) halo.current.opacity = 0.28 * f
   })
 
   const scorchSize = 2.8 * s
@@ -153,6 +158,14 @@ export function FireFX({ x, y, size = 1.5, smoke = true }: { x: number; y: numbe
         <planeGeometry args={[scorchSize, scorchSize]} />
         <meshBasicMaterial map={scorch()} transparent depthWrite={false} polygonOffset polygonOffsetFactor={-2} />
       </mesh>
+      {/* fake firelight on the unlit scan: a pool on the floor and a halo around the flames */}
+      <mesh position={[0, 0, 0.02]} renderOrder={2}>
+        <planeGeometry args={[6.5 * s, 6.5 * s]} />
+        <meshBasicMaterial ref={pool} map={glow()} color="#ff6410" transparent opacity={0.5} depthWrite={false} fog={false} />
+      </mesh>
+      <sprite position={[0, 0, 0.9]} scale={[4.5 * s, 4.5 * s, 1]} renderOrder={4}>
+        <spriteMaterial ref={halo} map={glow()} color="#ff7020" transparent opacity={0.25} depthWrite={false} fog={false} />
+      </sprite>
       <points geometry={flame.geo} material={flame.mat} renderOrder={3} />
       {smoke && <points geometry={smk.geo} material={smk.mat} renderOrder={2} />}
       <Sparkles
