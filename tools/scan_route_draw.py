@@ -70,6 +70,7 @@ class Route:
         self.checkpoints: list[dict] = []          # {"node", "drone"}
         self.history: list = []
         self.dirty = False
+        self.keep_ids = True        # --renumber turns this off
 
     # ---- persistence -------------------------------------------------------
     def load(self, sc: dict) -> None:
@@ -222,8 +223,14 @@ class Route:
         return (best[0], best[2]) if best else (None, None)
 
     # ---- output ------------------------------------------------------------
-    def renumbered(self):
-        """Ids n1.. in BFS order from the entrance (n1 = entrance), e1.. likewise."""
+    def renumbered(self, keep: bool = False):
+        """Ids n1.. in BFS order from the entrance (n1 = entrance), e1.. likewise.
+        keep=True: keep the existing ids (other people refer to them), order by number."""
+        if keep:
+            num = lambda i: int(i[1:]) if i[1:].isdigit() else 10 ** 9
+            order = sorted(self.nodes, key=num)
+            eorder = sorted(self.edges, key=num)
+            return {n: n for n in order}, {e: e for e in eorder}, order, eorder
         ent = self.entrance() or next(iter(self.nodes), None)
         adj = {n: [] for n in self.nodes}
         for d in self.edges.values():
@@ -251,7 +258,10 @@ class Route:
         if self.entrance() is None:
             warn.append("no entrance node: making the first node the entrance")
             self.nodes[next(iter(self.nodes))]["kind"] = "entrance"
-        nmap, emap, order, eorder = self.renumbered()
+        nmap, emap, order, eorder = self.renumbered(keep=self.keep_ids)
+        ent0 = self.entrance()
+        if self.keep_ids and ent0 and order[0] != ent0:
+            order.remove(ent0); order.insert(0, ent0)
         nodes = [{"id": nmap[n], "x": self.nodes[n]["x"], "y": self.nodes[n]["y"], "kind": self.nodes[n]["kind"]}
                  for n in order]
         edges = []
@@ -339,7 +349,7 @@ class View:
 class App:
     PICK_PX = 12
 
-    def __init__(self, map_dir: Path, fresh: bool, size):
+    def __init__(self, map_dir: Path, fresh: bool, size, renumber: bool = False):
         self.map_dir = map_dir
         meta = json.loads((map_dir / "topdown.json").read_text())
         bg = cv2.imread(str(map_dir / meta["image"]))
@@ -349,6 +359,7 @@ class App:
         pitch = float(self.sc.get("grid", {}).get("resolution", 0.1))
         grid = cv2.imread(str(map_dir / "grid.png"), cv2.IMREAD_GRAYSCALE)
         self.route = Route(grid, pitch)
+        self.route.keep_ids = not renumber
         if not fresh:
             self.route.load(self.sc)
         self.view = View(bg, meta["res"], size)
@@ -509,7 +520,7 @@ class App:
                 cv2.line(img, (p[0] - s, p[1] + s), (p[0] + s, p[1] - s), RED, 4, cv2.LINE_AA)
         if self.mode == "route" and self.head in R.nodes:
             cv2.line(img, V.w2s(*R.xy(self.head)), self.mouse, VIOLET, 1, cv2.LINE_AA)
-        nmap = R.renumbered()[0] if R.nodes else {}
+        nmap = R.renumbered(keep=R.keep_ids)[0] if R.nodes else {}
         for i, n in R.nodes.items():
             p = V.w2s(n["x"], n["y"])
             r = 7 if n["kind"] != "entrance" else 10
@@ -626,9 +637,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("map_dir", type=Path)
     ap.add_argument("--fresh", action="store_true", help="start from an empty graph")
+    ap.add_argument("--renumber", action="store_true",
+                    help="renumber ids n1.. in BFS order from the entrance on save (default: keep ids)")
     ap.add_argument("--size", type=int, nargs=2, default=(1400, 900), metavar=("W", "H"), help="window size")
     a = ap.parse_args()
-    App(a.map_dir, a.fresh, tuple(a.size)).run()
+    App(a.map_dir, a.fresh, tuple(a.size), a.renumber).run()
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@
   "entrance": {
     "x": 5.36,
     "y": 4.38,
-    "yaw": 0.0
+    "yaw": 1.57
   },
   "graph": {
     "nodes": [
@@ -33,21 +33,9 @@
         "kind": "junction"
       },
       {
-        "id": "n3",
-        "x": 3.81,
-        "y": 20.36,
-        "kind": "junction"
-      },
-      {
         "id": "n4",
         "x": 5.36,
         "y": 25.95,
-        "kind": "junction"
-      },
-      {
-        "id": "n5",
-        "x": 3.17,
-        "y": 25.6,
         "kind": "junction"
       },
       {
@@ -72,12 +60,6 @@
         "id": "n9",
         "x": 21.4,
         "y": 33.15,
-        "kind": "junction"
-      },
-      {
-        "id": "n10",
-        "x": 20.65,
-        "y": 34.77,
         "kind": "junction"
       },
       {
@@ -125,22 +107,10 @@
         "width": 2.1
       },
       {
-        "id": "e2",
-        "a": "n2",
-        "b": "n3",
-        "width": 1.6
-      },
-      {
         "id": "e3",
         "a": "n2",
         "b": "n4",
         "width": 2.0
-      },
-      {
-        "id": "e4",
-        "a": "n4",
-        "b": "n5",
-        "width": 2.1
       },
       {
         "id": "e5",
@@ -165,12 +135,6 @@
         "a": "n8",
         "b": "n9",
         "width": 1.8
-      },
-      {
-        "id": "e9",
-        "a": "n9",
-        "b": "n10",
-        "width": 0.7
       },
       {
         "id": "e10",
@@ -217,37 +181,22 @@
   "compromised": [
     {
       "edge": "e5",
-      "at": 0.56,
-      "kind": "debris"
-    },
-    {
-      "edge": "e4",
-      "at": 0.5,
-      "kind": "debris"
-    },
-    {
-      "edge": "e2",
-      "at": 0.52,
+      "at": 0.8,
       "kind": "debris"
     },
     {
       "edge": "e6",
-      "at": 0.58,
-      "kind": "debris"
-    },
-    {
-      "edge": "e11",
-      "at": 0.52,
+      "at": 0.8,
       "kind": "debris"
     },
     {
       "edge": "e14",
-      "at": 0.54,
+      "at": 0.8,
       "kind": "debris"
     },
     {
-      "edge": "e9",
-      "at": 0.5,
+      "edge": "e7",
+      "at": 0.45,
       "kind": "debris"
     }
   ],
@@ -302,5 +251,20 @@
       ]
     ],
     "altitude": 1.6
+  },
+  "fires": [
+    {
+      "x": 27.8,
+      "y": 31.1,
+      "size": 1.5
+    }
+  ],
+  "flare": {
+    "t": 65.0,
+    "target": "D3"
+  },
+  "beats": {
+    "decoy_drone": null,
+    "d3_area_node": "n12"
   }
 }
