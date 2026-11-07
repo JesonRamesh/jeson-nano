@@ -181,17 +181,17 @@
   "compromised": [
     {
       "edge": "e5",
-      "at": 0.56,
+      "at": 0.8,
       "kind": "debris"
     },
     {
       "edge": "e6",
-      "at": 0.75,
+      "at": 0.8,
       "kind": "debris"
     },
     {
       "edge": "e14",
-      "at": 0.54,
+      "at": 0.8,
       "kind": "debris"
     }
   ],
@@ -246,5 +246,12 @@
       ]
     ],
     "altitude": 1.6
-  }
+  },
+  "fires": [
+    {
+      "x": 27.8,
+      "y": 31.1,
+      "size": 1.5
+    }
+  ]
 }
