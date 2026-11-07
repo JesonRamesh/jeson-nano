@@ -61,7 +61,7 @@ def test_snapshot_round_trip_resumes_exactly(test_map, tmp_path) -> None:
 
 def test_auto_snapshots_and_jump_to_act2(test_map, tmp_path) -> None:
     loop = _loop(test_map, world_cls=FakeWorld, snapshot_dir=tmp_path)
-    loop.run(max_ticks=900)  # chain forms ~55 s on maps/test
+    loop.run(max_ticks=1300)  # chain forms ~55 s on maps/test, at its posts a little later
     assert (tmp_path / "act1_start.pkl").is_file()
     assert (tmp_path / "act2_start.pkl").is_file(), "act2_start not saved when the chain formed"
     t_chain = snapshot.load_path(tmp_path / "act2_start.pkl")["loop"]["t"]
@@ -90,7 +90,7 @@ def test_realtime_pacing_survives_a_time_jump(test_map, tmp_path) -> None:
     import time
 
     src = _loop(test_map, world_cls=FakeWorld, snapshot_dir=tmp_path)
-    src.run(max_ticks=900)  # saves act2_start when the chain forms
+    src.run(max_ticks=1300)  # saves act2_start once the chain is at its posts
     snap_ticks = snapshot.load("act2_start", tmp_path)["loop"]["ticks"]
 
     bus = Bus()

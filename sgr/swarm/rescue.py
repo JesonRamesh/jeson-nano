@@ -32,6 +32,8 @@ OLD_ROUTE_S = 6.0
 NO_ROUTE_RECHECK_S = 2.0
 WATCH_M = 3.3  # fire-watch distance: ~55 °C on the heat model, under the 70 °C retreat limit
 TURN_DEG = 35.0
+CHAIN_READY_M = 0.8  # a chain drone this close to its post is in position
+CHAIN_READY_MAX_S = 40.0  # ... or call the chain ready this long after it formed anyway
 CHAIN_MAX = 3  # survivor + lead + one sentinel (the three checkpoints); extra drones keep exploring
 _RING = np.radians(np.arange(0, 360, 10))
 
@@ -53,6 +55,7 @@ class Rescue:
     _pending: tuple[str, str, list[tuple[int, int]], Pt] | None = None  # (sensor, drone, cells, xy)
     _next_check: float = 0.0
     _chain_key: tuple | None = None
+    _chain_t: float | None = None  # when the chain formed
 
     # ------------------------------------------------------------------ inputs
     def on_new_cells(self, sensor: str, drone: str, cells: list[tuple[int, int]]) -> None:
@@ -80,7 +83,19 @@ class Rescue:
         self._pending = None
         if self.bb.route.status == "none":
             return "no_route"
-        return "chain" if self.roles else "explore"
+        if not self.roles:
+            return "explore"
+        return "chain_ready" if self._chain_ready(t, agents, alive) else "chain"
+
+    def _chain_ready(self, t: float, agents: dict[str, Agent], alive: dict[str, Pose]) -> bool:
+        """Every chain drone at its post (Act 2 starts here: the lead is at the entrance)."""
+        if self._chain_t is not None and t - self._chain_t >= CHAIN_READY_MAX_S:
+            return True
+        for d in self.roles:
+            post, p = agents[d]._station, alive.get(d)
+            if post is None or p is None or math.hypot(p.x - post[0], p.y - post[1]) > CHAIN_READY_M:
+                return False
+        return True
 
     # ------------------------------------------------------------------ route
     def _plan(self, t: float, target: Pt, first: bool = False) -> None:
@@ -196,6 +211,7 @@ class Rescue:
         lead = next((d for d, r in self.roles.items() if r == "lead"), None)
         self.bb.lead = lead
         if first:
+            self._chain_t = t
             self.bb.chain_formed = True
             self.bb.event("chain_formed", drone=lead, xy=target)
 
