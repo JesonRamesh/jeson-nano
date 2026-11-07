@@ -368,7 +368,7 @@ class App:
         wx, wy = V.s2w(sx, sy)
         rad = self.PICK_PX / V.zoom * V.res
         if ev in (cv2.EVENT_MOUSEWHEEL, cv2.EVENT_MOUSEHWHEEL):
-            d = cv2.getMouseWheelDelta(flags)
+            d = flags >> 16          # == cv2.getMouseWheelDelta (missing from some Python builds)
             if flags & cv2.EVENT_FLAG_CTRLKEY:          # ctrl + scroll = zoom
                 V.zoom_at(sx, sy, 1.1 if d > 0 else 1 / 1.1)
             elif ev == cv2.EVENT_MOUSEWHEEL:              # two-finger scroll = pan
@@ -592,12 +592,13 @@ class App:
     def render_full(self) -> np.ndarray:
         """Route over the full-resolution top-down image."""
         V = self.view
-        saved = (V.W, V.H, V.zoom, V.ox, V.oy, self.show_help, self.msg, self.head)
+        saved = (V.W, V.H, V.zoom, V.ox, V.oy, self.show_help, self.msg, self.head, self.show_grid)
+        self.show_grid = False
         V.W, V.H = V.bg.shape[1], V.bg.shape[0]
         V.zoom, V.ox, V.oy = 1.0, 0.0, 0.0
         self.show_help, self.msg, self.head = False, "", None
         img = self.frame()
-        V.W, V.H, V.zoom, V.ox, V.oy, self.show_help, self.msg, self.head = saved
+        V.W, V.H, V.zoom, V.ox, V.oy, self.show_help, self.msg, self.head, self.show_grid = saved
         return img
 
     def run(self) -> None:
