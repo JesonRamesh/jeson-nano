@@ -1,0 +1,104 @@
+"""Smoke test = the merge gate (§12). Headless, mock perception, test map, max speed.
+
+`test_act1_beats` is xfail until the real swarm + mock perception exist. When it starts
+passing (XPASS), remove the xfail marker so it guards every merge.
+"""
+
+from __future__ import annotations
+
+import math
+
+import pytest
+
+from sgr.contracts import PriorMap, Scenario
+from sgr.guidance import Guidance
+from sgr.loop import SimLoop
+from sgr.perception import Perception
+from sgr.swarm import Swarm
+from sgr.world import FakeWorld, World
+
+TICKS = 1500
+
+
+def _loop(test_map, world_cls=World) -> SimLoop:
+    sc = Scenario.load(test_map)
+    world = world_cls(test_map, sc)
+    return SimLoop(
+        world,
+        Perception(mode="mock", ground_truth=world.ground_truth),
+        Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids)),
+        sc,
+        guidance=Guidance(),
+        bus=None,
+        render=False,
+        realtime=False,
+    )
+
+
+def test_loop_runs_headless(test_map) -> None:
+    loop = _loop(test_map)
+    loop.run(max_ticks=TICKS)
+    assert loop.ticks == TICKS
+    assert math.isclose(loop.t, TICKS * 0.1, rel_tol=1e-6)
+    assert "D3" in loop.dead  # flare-up at t=65 s
+
+
+@pytest.mark.xfail(reason="needs the real Swarm (S, H1-H7) and mock Perception (P)", strict=False)
+def test_act1_beats(test_map) -> None:
+    loop = _loop(test_map)
+    loop.run(max_ticks=TICKS)
+    actions = {r.action for r in loop.trace}
+    assert "SURVIVOR_CONFIRMED" in actions, "survivor never confirmed"
+    assert "REPLAN" in actions, "no REPLAN"
+    assert "REJECT_DETECTION" in actions, "no REJECT_DETECTION"
+    assert any(
+        r.action == "DRONE_LOST" and (r.drone == "D3" or "D3" in r.reason) for r in loop.trace
+    ), "D3 never declared lost"
+
+
+# ---- FakeWorld sanity (keeps the stub honest for everyone developing against it) ----
+
+
+def test_fake_world_lidar_and_motion(test_map) -> None:
+    sc = Scenario.load(test_map)
+    w = FakeWorld(test_map, sc)
+    scan = w.lidar("D1")  # D1 at (2, 2.5) facing east, corridor y in [2.1, 3.9]
+    assert scan.shape == (36,)
+    assert scan[0] > 4.0  # long way east down the corridor
+    assert scan[27] < 1.0  # ray 27 = 270 deg = south wall ~0.4 m away
+    w.set_drone_cmd("D1", 1.0, 0.0, 0.0, 0.0)
+    w.step(200)  # 1 s
+    assert math.isclose(w.drone_pose("D1").x, 3.0, abs_tol=0.06)
+    w.set_drone_cmd("D1", 0.0, -1.0, 0.0, 0.0)  # into the south wall
+    w.step(400)
+    assert w.drone_pose("D1").y > 2.1  # stopped by the wall
+
+
+def test_fake_world_compromised_edge_blocks(test_map) -> None:
+    sc = Scenario.load(test_map)
+    w = FakeWorld(test_map, sc)
+    w.set_drone_cmd("D2", 1.2, 0.0, 0.0, 0.0)
+    w.step(200 * 20)  # 20 s east along e2; debris at x=14
+    assert w.drone_pose("D2").x < 14.0
+
+
+def test_fake_world_change_tool_and_heat(test_map) -> None:
+    sc = Scenario.load(test_map)
+    w = FakeWorld(test_map, sc)
+    assert w.place_debris(2.0, 3.0) is None  # too close to drones
+    h = w.place_debris(6.0, 3.0)
+    assert h is not None
+    w.set_drone_cmd("D1", 1.0, 0.0, 0.0, 0.0)
+    w.step(200 * 6)
+    assert w.drone_pose("D1").x < 5.6
+    w.remove(h)
+    w.step(200 * 3)
+    assert w.drone_pose("D1").x > 6.0
+    f = w.place_fire(10.0, 3.0)
+    assert f is not None
+    w.set_drone_cmd("D1", 0.0, 0.0, 0.0, 0.0)
+    assert w.temperature("D1") > 20.0
+    state = w.get_state()
+    w.remove(f)
+    w.set_state(state)
+    assert len(w.ground_truth().fires) == len(sc.fires) + 1
