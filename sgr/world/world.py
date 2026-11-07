@@ -278,6 +278,21 @@ class World:
         hit = pnt + dist * vec
         return XY(x=float(hit[0]), y=float(hit[1]))
 
+    def line_of_sight(self, drone: str, x: float, y: float, z: float = 0.0) -> bool:
+        """True if no wall or debris blocks the ray from this drone's camera to (x, y, z).
+
+        Hits within the last 0.3 m don't count, so a panel mounted on a wall still counts as visible.
+        """
+        cid = self._d[drone]["cam"]
+        pnt = self.data.cam_xpos[cid].copy()
+        vec = np.array([x, y, z]) - pnt
+        dist = float(np.linalg.norm(vec))
+        if dist < 1e-6:
+            return True
+        vec /= dist
+        hit = mujoco.mj_ray(self.model, self.data, pnt, vec, LIDAR_GROUPS, 1, self._d[drone]["body"], self._ray_gid)
+        return hit < 0 or hit >= dist - 0.3
+
     def close(self) -> None:
         if self._renderer is not None:
             self._renderer.close()
