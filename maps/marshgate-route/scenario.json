@@ -1,0 +1,306 @@
+{
+  "version": 1,
+  "name": "marshgate-route",
+  "grid": {
+    "file": "grid.png",
+    "resolution": 0.1,
+    "origin": [
+      0,
+      0
+    ]
+  },
+  "scan": {
+    "file": "scan.glb",
+    "transform": "transform.json"
+  },
+  "entrance": {
+    "x": 5.36,
+    "y": 4.38,
+    "yaw": 0.0
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "n1",
+        "x": 5.36,
+        "y": 4.38,
+        "kind": "entrance"
+      },
+      {
+        "id": "n2",
+        "x": 5.36,
+        "y": 20.41,
+        "kind": "junction"
+      },
+      {
+        "id": "n3",
+        "x": 3.81,
+        "y": 20.36,
+        "kind": "junction"
+      },
+      {
+        "id": "n4",
+        "x": 5.36,
+        "y": 25.95,
+        "kind": "junction"
+      },
+      {
+        "id": "n5",
+        "x": 3.17,
+        "y": 25.6,
+        "kind": "junction"
+      },
+      {
+        "id": "n6",
+        "x": 5.36,
+        "y": 32.18,
+        "kind": "junction"
+      },
+      {
+        "id": "n7",
+        "x": 12.8,
+        "y": 27.8,
+        "kind": "junction"
+      },
+      {
+        "id": "n8",
+        "x": 12.8,
+        "y": 30.1,
+        "kind": "junction"
+      },
+      {
+        "id": "n9",
+        "x": 21.4,
+        "y": 33.15,
+        "kind": "junction"
+      },
+      {
+        "id": "n10",
+        "x": 20.65,
+        "y": 34.77,
+        "kind": "junction"
+      },
+      {
+        "id": "n11",
+        "x": 24.85,
+        "y": 34.38,
+        "kind": "junction"
+      },
+      {
+        "id": "n12",
+        "x": 26.12,
+        "y": 31.2,
+        "kind": "junction"
+      },
+      {
+        "id": "n13",
+        "x": 29.7,
+        "y": 36.1,
+        "kind": "junction"
+      },
+      {
+        "id": "n14",
+        "x": 27.28,
+        "y": 42.73,
+        "kind": "junction"
+      },
+      {
+        "id": "n15",
+        "x": 25.84,
+        "y": 47.17,
+        "kind": "junction"
+      },
+      {
+        "id": "n16",
+        "x": 36.62,
+        "y": 45.61,
+        "kind": "junction"
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "a": "n1",
+        "b": "n2",
+        "width": 2.1
+      },
+      {
+        "id": "e2",
+        "a": "n2",
+        "b": "n3",
+        "width": 1.6
+      },
+      {
+        "id": "e3",
+        "a": "n2",
+        "b": "n4",
+        "width": 2.0
+      },
+      {
+        "id": "e4",
+        "a": "n4",
+        "b": "n5",
+        "width": 2.1
+      },
+      {
+        "id": "e5",
+        "a": "n4",
+        "b": "n6",
+        "width": 2.4
+      },
+      {
+        "id": "e6",
+        "a": "n4",
+        "b": "n7",
+        "width": 3.5
+      },
+      {
+        "id": "e7",
+        "a": "n4",
+        "b": "n8",
+        "width": 2.1
+      },
+      {
+        "id": "e8",
+        "a": "n8",
+        "b": "n9",
+        "width": 1.8
+      },
+      {
+        "id": "e9",
+        "a": "n9",
+        "b": "n10",
+        "width": 0.7
+      },
+      {
+        "id": "e10",
+        "a": "n9",
+        "b": "n11",
+        "width": 2.0
+      },
+      {
+        "id": "e11",
+        "a": "n11",
+        "b": "n12",
+        "width": 2.8
+      },
+      {
+        "id": "e12",
+        "a": "n11",
+        "b": "n13",
+        "width": 2.0
+      },
+      {
+        "id": "e13",
+        "a": "n13",
+        "b": "n14",
+        "width": 2.0
+      },
+      {
+        "id": "e14",
+        "a": "n14",
+        "b": "n15",
+        "width": 1.9
+      },
+      {
+        "id": "e15",
+        "a": "n14",
+        "b": "n16",
+        "width": 0.9
+      }
+    ]
+  },
+  "_placeholders": [
+    "drones"
+  ],
+  "graph_source": "manual",
+  "compromised": [
+    {
+      "edge": "e5",
+      "at": 0.56,
+      "kind": "debris"
+    },
+    {
+      "edge": "e4",
+      "at": 0.5,
+      "kind": "debris"
+    },
+    {
+      "edge": "e2",
+      "at": 0.52,
+      "kind": "debris"
+    },
+    {
+      "edge": "e6",
+      "at": 0.58,
+      "kind": "debris"
+    },
+    {
+      "edge": "e11",
+      "at": 0.52,
+      "kind": "debris"
+    },
+    {
+      "edge": "e14",
+      "at": 0.54,
+      "kind": "debris"
+    },
+    {
+      "edge": "e9",
+      "at": 0.5,
+      "kind": "debris"
+    }
+  ],
+  "checkpoints": [
+    {
+      "x": 5.36,
+      "y": 25.95,
+      "drone": null,
+      "node": "n4"
+    },
+    {
+      "x": 29.7,
+      "y": 36.1,
+      "drone": null,
+      "node": "n13"
+    },
+    {
+      "x": 36.62,
+      "y": 45.61,
+      "drone": null,
+      "node": "n16"
+    }
+  ],
+  "survivor": {
+    "x": 36.62,
+    "y": 45.61,
+    "yaw": 0.0
+  },
+  "drones": {
+    "ids": [
+      "D1",
+      "D2",
+      "D3",
+      "D4"
+    ],
+    "start": [
+      [
+        5.76,
+        4.38
+      ],
+      [
+        5.36,
+        4.78
+      ],
+      [
+        4.96,
+        4.38
+      ],
+      [
+        5.36,
+        3.98
+      ]
+    ],
+    "altitude": 1.6
+  }
+}

@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
-import { sim, type BeliefGrid } from '../state/store'
-import { fitView, toCanvas, type MapView } from './mapView'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ClientMsg } from '../contracts'
+import { useFreeGrid, type FreeGrid } from '../state/grid'
+import { sim, useSim, type BeliefGrid } from '../state/store'
+import { placeClick, undoClick, type ClickMode } from './clickTool'
+import { fitView, toCanvas, toWorld, type MapView } from './mapView'
 
 // Layer colours (projector-friendly on a dark background).
 const C = {
@@ -19,39 +22,28 @@ const C = {
   lidar: 'rgba(255, 255, 255, 0.18)',
 }
 
-/** grid.png (0 = wall, 255 = free) -> coloured canvas at grid resolution. */
-function useGridCanvas(url: string | undefined) {
-  const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null)
-  useEffect(() => {
-    if (!url) return
-    let cancelled = false
-    const img = new Image()
-    img.onload = () => {
-      if (cancelled) return
-      const c = document.createElement('canvas')
-      c.width = img.width
-      c.height = img.height
-      const ctx = c.getContext('2d')!
-      ctx.drawImage(img, 0, 0)
-      const data = ctx.getImageData(0, 0, c.width, c.height)
-      const wall = [0x47, 0x4e, 0x5b]
-      const free = [0x1b, 0x1f, 0x27]
-      for (let p = 0; p < data.data.length; p += 4) {
-        const col = data.data[p] > 127 ? free : wall
-        data.data[p] = col[0]
-        data.data[p + 1] = col[1]
-        data.data[p + 2] = col[2]
-        data.data[p + 3] = 255
-      }
-      ctx.putImageData(data, 0, 0)
-      setCanvas(c)
+/** FreeGrid -> coloured canvas at grid resolution (row 0 at the top). */
+function gridCanvas(g: FreeGrid): HTMLCanvasElement {
+  const c = document.createElement('canvas')
+  c.width = g.w
+  c.height = g.h
+  const ctx = c.getContext('2d')!
+  const img = ctx.createImageData(g.w, g.h)
+  const wall = [0x47, 0x4e, 0x5b]
+  const free = [0x1b, 0x1f, 0x27]
+  for (let row = 0; row < g.h; row++) {
+    const iy = g.h - 1 - row
+    for (let ix = 0; ix < g.w; ix++) {
+      const col = g.free[iy * g.w + ix] ? free : wall
+      const p = (row * g.w + ix) * 4
+      img.data[p] = col[0]
+      img.data[p + 1] = col[1]
+      img.data[p + 2] = col[2]
+      img.data[p + 3] = 255
     }
-    img.src = url
-    return () => {
-      cancelled = true
-    }
-  }, [url])
-  return canvas
+  }
+  ctx.putImageData(img, 0, 0)
+  return c
 }
 
 /** Belief layers -> canvas at belief resolution (1 px per 0.2 m cell, row 0 at the top). */
@@ -105,19 +97,32 @@ function polyline(ctx: CanvasRenderingContext2D, v: MapView, pts: [number, numbe
   ctx.stroke()
 }
 
-export function BeliefMap() {
+export function BeliefMap({ send }: { send: (m: ClientMsg) => void }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const viewRef = useRef<MapView | null>(null)
   const [showLidar, setShowLidar] = useState(true)
-  const [gridUrl, setGridUrl] = useState<string>()
-  const grid = useGridCanvas(gridUrl)
+  const [mode, setMode] = useState<ClickMode | null>(null)
+  const gridUrl = useSim((s) => s.hello?.map.grid_url)
+  const gridRes = useSim((s) => s.hello?.map.resolution)
+  const freeGrid = useFreeGrid(gridUrl, gridRes)
+  const grid = useMemo(() => (freeGrid ? gridCanvas(freeGrid) : null), [freeGrid])
+  const handleCount = useSim((s) => s.state?.click_handles.length ?? 0)
 
-  // Track the grid URL from hello without re-rendering on every state message.
+  // Esc leaves click mode.
   useEffect(() => {
-    const update = () => setGridUrl(sim.snap.hello?.map.grid_url)
-    update()
-    return sim.subscribe(update)
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMode(null)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  const onCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const v = viewRef.current
+    if (!mode || !v) return
+    const r = e.currentTarget.getBoundingClientRect()
+    const [x, y] = toWorld(v, e.clientX - r.left, e.clientY - r.top)
+    placeClick(send, freeGrid, mode, Math.round(x * 100) / 100, Math.round(y * 100) / 100)
+  }
 
   // Draw loop: repaint on animation frames when something changed.
   useEffect(() => {
@@ -164,7 +169,8 @@ export function BeliefMap() {
       const m = hello.map
       const worldW = m.size[0] * m.resolution
       const worldH = m.size[1] * m.resolution
-      const v = fitView(worldW, worldH, size.w, size.h)
+      const v = fitView(worldW, worldH, size.w, size.h, 12, 44, 34) // room for toolbar + legend
+      viewRef.current = v
       const [x0, y0] = toCanvas(v, m.origin[0], m.origin[1] + worldH) // top-left corner
 
       // 1 prior walls
@@ -176,6 +182,24 @@ export function BeliefMap() {
       }
       // 2 searched + belief cells
       if (b) ctx.drawImage(beliefCanvas, x0, y0, b.w * b.res * v.scale, b.h * b.res * v.scale)
+
+      // judge placements (click tool): debris = 1 x 1 m block, fire = disc
+      for (const h of state?.click_handles ?? []) {
+        const [hx, hy] = toCanvas(v, h.x, h.y)
+        if (h.kind === 'debris') {
+          ctx.fillStyle = '#8d6e63'
+          ctx.strokeStyle = '#d7ccc8'
+          ctx.lineWidth = 2
+          const s = Math.max(8, v.scale)
+          ctx.fillRect(hx - s / 2, hy - s / 2, s, s)
+          ctx.strokeRect(hx - s / 2, hy - s / 2, s, s)
+        } else {
+          ctx.fillStyle = '#ff6d00'
+          ctx.beginPath()
+          ctx.arc(hx, hy, Math.max(6, 0.6 * v.scale), 0, Math.PI * 2)
+          ctx.fill()
+        }
+      }
 
       // entrance
       const [ex, ey] = toCanvas(v, hello.entrance.x, hello.entrance.y)
@@ -271,8 +295,19 @@ export function BeliefMap() {
 
   return (
     <div className="belief-map" ref={wrapRef}>
-      <canvas ref={canvasRef} />
+      <canvas ref={canvasRef} onClick={onCanvasClick} className={mode ? `click-mode click-${mode}` : ''} />
       <div className="map-toolbar">
+        <div className="click-tool">
+          <button className={mode === 'debris' ? 'active' : ''} onClick={() => setMode(mode === 'debris' ? null : 'debris')}>
+            Debris
+          </button>
+          <button className={mode === 'fire' ? 'active fire' : 'fire'} onClick={() => setMode(mode === 'fire' ? null : 'fire')}>
+            Fire
+          </button>
+          <button onClick={() => undoClick(send)} disabled={handleCount === 0}>
+            Undo{handleCount ? ` (${handleCount})` : ''}
+          </button>
+        </div>
         <label>
           <input type="checkbox" checked={showLidar} onChange={(e) => setShowLidar(e.target.checked)} /> LiDAR rays
         </label>

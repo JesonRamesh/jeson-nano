@@ -1,0 +1,15 @@
+{
+  "image": "topdown.jpg",
+  "res": 0.02,
+  "origin": [
+    0,
+    0
+  ],
+  "size": [
+    1620,
+    860
+  ],
+  "cut": 1.6,
+  "source": "scan_raw.glb",
+  "note": "bottom-left pixel = world (0,0), same frame as grid.png"
+}
