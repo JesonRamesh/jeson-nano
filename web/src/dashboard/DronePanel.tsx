@@ -17,15 +17,6 @@ interface Props {
 const CAM_W = 320
 const CAM_H = 240
 
-/** Detection status -> tone used for its tag on the feed. */
-const DET_TONE: Record<string, string> = {
-  confirmed: 'bad',
-  low_conf: 'warn',
-  pending: 'warn',
-  rejected: 'ok',
-  unconfirmed: 'warn',
-}
-
 /**
  * LiDAR top view: the drone at the centre, heading up, 36 rays (ray k at yaw + k·10°),
  * 6 m to the edge. Drawn at device resolution so it stays crisp on the projector.
@@ -70,13 +61,13 @@ function LidarTopView({ lidar, colour }: { lidar: number[]; colour: string }) {
         else ctx.lineTo(x, y)
       })
       ctx.closePath()
-      ctx.fillStyle = colour + '30'
+      ctx.fillStyle = 'rgba(238, 241, 244, 0.10)'
       ctx.fill()
-      ctx.strokeStyle = colour
-      ctx.lineWidth = 1.25
+      ctx.strokeStyle = 'rgba(238, 241, 244, 0.85)'
+      ctx.lineWidth = 1.1
       ctx.stroke()
     }
-    // the drone itself
+    // the drone itself (its colour is the one link to the 3D view)
     ctx.fillStyle = colour
     ctx.beginPath()
     ctx.moveTo(mid, mid - 4)
@@ -132,7 +123,7 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
   const temp = state?.temp ?? 0
   const hot = temp > tempLimit
   const g = detection?.gemma
-  const status = (state?.status ?? 'NO DATA').toUpperCase()
+  const status = alive ? (state?.status ?? 'no data').toLowerCase() : 'offline'
 
   return (
     <div className={`feed ${alive ? '' : 'lost'}`} style={{ ['--drone' as string]: colour }}>
@@ -165,14 +156,14 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
         </div>
         {!alive && (
           <div className="signal-lost">
-            <span>SIGNAL LOST</span>
+            <span>No signal</span>
           </div>
         )}
 
         {/* --- telemetry overlay --- */}
         <div className="feed-top">
           <span className="feed-id">{id}</span>
-          <span className={`feed-status status-${status.toLowerCase().replace(/\s+/g, '-')}`}>{status}</span>
+          <span className="feed-status">{status}</span>
           <span className="feed-task">{state?.task && noEmDash(alive ? state.task : `last: ${state.task}`)}</span>
           <span className={`feed-temp ${hot ? 'hot' : ''}`} title="Drone temperature">
             {alive ? `${temp.toFixed(0)}°C` : '--°C'}
@@ -182,9 +173,7 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
           <div className="feed-det">
             {detection ? (
               <>
-                <span className={`det-tag tone-${DET_TONE[detection.status] ?? 'dim'}`}>
-                  {detection.status.replace('_', ' ')}
-                </span>
+                <span className="det-tag">{detection.status.replace('_', ' ')}</span>
                 <span className="det-caption">
                   {g?.pending ? 'Gemma checking' : g?.caption ? noEmDash(g.caption) : 'no Gemma result'}
                   {g?.conf != null && !g.pending && <span className="det-conf">{g.conf.toFixed(2)}</span>}

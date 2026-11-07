@@ -5,12 +5,15 @@ import { sim, useSim } from '../state/store'
 import { Toasts } from '../ui/Toasts'
 import { Banners } from './Banners'
 import { DronePanel, type DronePanelHandle } from './DronePanel'
+import { NetworkGraph } from './NetworkGraph'
 import { TracePanel } from './TracePanel'
 import './dashboard.css'
 
 const DEFAULT_DRONES = ['D1', 'D2', 'D3', 'D4'].map((id) => ({ id, colour: '#8590a0' }))
 const TEMP_LIMIT_C = 70 // §7.4 retreat threshold
 const MAP_TILE = 'map'
+const LOG_TILE = 'log'
+const NET_TILE = 'net'
 const FLIP_MS = 420
 
 /** Browser full screen for the whole dashboard; also toggled with the F key. */
@@ -104,7 +107,7 @@ function Tile({
   children,
 }: {
   id: string
-  slot: number // position in the default grid: 0 = map, 1-4 = drone feeds
+  slot: number // position in the default grid: 0 = map, 1-4 = drone feeds, 5 = log, 6 = links
   focus: string | null
   label: string
   register: (el: HTMLElement | null) => void
@@ -118,9 +121,9 @@ function Tile({
   return (
     <section
       ref={register}
-      className={`tile tile-${role} ${id === MAP_TILE ? 'tile-map' : 'tile-feed'}`}
+      className={`tile tile-${role} tile-${id === MAP_TILE ? 'map' : id === LOG_TILE ? 'log' : id === NET_TILE ? 'net' : 'feed'}`}
       style={
-        focus === null ? { gridArea: `t${slot}` } : isFocused ? { gridArea: '1 / 1 / 5 / 2' } : { gridColumn: '2' }
+        focus === null ? { gridArea: `t${slot}` } : isFocused ? { gridArea: '1 / 1 / 7 / 2' } : { gridColumn: '2' }
       }
       onPointerDown={(e) => (down.current = { x: e.clientX, y: e.clientY })}
       onClick={(e) => {
@@ -173,6 +176,16 @@ export default function Dashboard() {
   const state = useSim((s) => s.state)
   const detections = useSim((s) => s.detections)
   const drones = hello?.drones ?? DEFAULT_DRONES
+  // Only flag the link after it has been down for a moment (no flash on a quick reconnect).
+  const [linkDown, setLinkDown] = useState(false)
+  useEffect(() => {
+    if (status === 'connected') {
+      const t = setTimeout(() => setLinkDown(false), 0)
+      return () => clearTimeout(t)
+    }
+    const t = setTimeout(() => setLinkDown(true), 2000)
+    return () => clearTimeout(t)
+  }, [status])
 
   // ---- focus + smooth re-arrangement ----
   const [focus, setFocusState] = useState<string | null>(null)
@@ -209,7 +222,7 @@ export default function Dashboard() {
     <div className="dash">
       <Toasts />
       <Banners />
-      {status !== 'connected' && <div className="link-pill">{status === 'connecting' ? 'Connecting to sim' : 'Sim link lost, reconnecting'}</div>}
+      {linkDown && <div className="link-pill">{status === 'connecting' ? 'Connecting to sim' : 'Sim link lost, reconnecting'}</div>}
       {versionMismatch && <div className="link-pill bad">Contract mismatch: server v{hello?.contract_version}</div>}
 
       <main className={`stage ${focus === null ? 'stage-grid' : 'stage-focus'}`}>
@@ -230,19 +243,25 @@ export default function Dashboard() {
             />
           </Tile>
         ))}
+        <Tile {...tileProps(LOG_TILE, 5, 'Decision log')}>
+          <TracePanel detailed={focus === LOG_TILE} />
+        </Tile>
+        <Tile {...tileProps(NET_TILE, 6, 'Swarm links')}>
+          <NetworkGraph
+            detailed={focus === NET_TILE}
+            actions={
+              <button
+                className="icon-btn"
+                onClick={fullscreen.toggle}
+                title={fullscreen.on ? 'Exit full screen (F)' : 'Full screen (F)'}
+                aria-label={fullscreen.on ? 'Exit full screen' : 'Full screen'}
+              >
+                <FullscreenIcon exit={fullscreen.on} />
+              </button>
+            }
+          />
+        </Tile>
       </main>
-      <TracePanel
-        actions={
-          <button
-            className="icon-btn"
-            onClick={fullscreen.toggle}
-            title={fullscreen.on ? 'Exit full screen (F)' : 'Full screen (F)'}
-            aria-label={fullscreen.on ? 'Exit full screen' : 'Full screen'}
-          >
-            <FullscreenIcon exit={fullscreen.on} />
-          </button>
-        }
-      />
     </div>
   )
 }

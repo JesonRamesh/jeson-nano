@@ -27,7 +27,7 @@ function ScanPolar({ scan }: { scan: number[] }) {
     <svg width={s} height={s} className="evidence-scan">
       <circle cx={s / 2} cy={s / 2} r={r0} fill="none" stroke="#2a2f3a" />
       <circle cx={s / 2} cy={s / 2} r={r0 / 2} fill="none" stroke="#2a2f3a" />
-      <polygon points={pts} fill="rgba(255,77,79,0.25)" stroke="#ff4d4f" />
+      <polygon points={pts} fill="rgba(238,241,244,0.12)" stroke="#eef1f4" />
       <line x1={s / 2} y1={s / 2} x2={s / 2} y2={6} stroke="#8a93a3" strokeDasharray="3 3" />
     </svg>
   )
@@ -62,30 +62,53 @@ function EvidenceFrame({ frameId }: { frameId: string }) {
   )
 }
 
-function Row({ row, colour, open, onToggle }: { row: TraceRow; colour: string; open: boolean; onToggle: () => void }) {
+/** Action code -> short plain words for the log ("MARK_BLOCKED" -> "marked blocked"). */
+const ACTION_WORDS: Record<string, string> = {
+  ASSIGN_AREA: 'assigned area',
+  EXPLORE: 'exploring',
+  INSPECT: 'inspecting',
+  CONFIRM_HAZARD: 'hazard confirmed',
+  REJECT_DETECTION: 'rejected detection',
+  UNCONFIRMED: 'unconfirmed',
+  MARK_BLOCKED: 'marked blocked',
+  REPLAN: 'replanned',
+  RETREAT: 'retreating',
+  DRONE_LOST: 'drone lost',
+  REASSIGN: 'reassigned',
+  SURVIVOR_CONFIRMED: 'survivor confirmed',
+  CHAIN_POSITION: 'chain position',
+  NO_ROUTE: 'no route',
+  ESCORT: 'escorting',
+  FF_CORRECTION: 'firefighter correction',
+  MISSION_COMPLETE: 'mission complete',
+}
+const ALERT = new Set(['DRONE_LOST', 'MARK_BLOCKED', 'NO_ROUTE', 'RETREAT'])
+
+function Row({ row, open, onToggle, detailed }: { row: TraceRow; open: boolean; onToggle: () => void; detailed: boolean }) {
   const e = row.evidence
   const det = e.frame_id ? sim.detectionsByFrame.get(e.frame_id) : undefined
   return (
-    <li className={`trace-row ${open ? 'open' : ''}`} onClick={onToggle}>
+    <li
+      className={`trace-row ${open ? 'open' : ''} ${ALERT.has(row.action) ? 'alert' : ''}`}
+      onClick={detailed ? onToggle : undefined}
+    >
       <div className="trace-line">
-        <span className="mono muted trace-t">{row.t.toFixed(1)}s</span>
-        <span className="trace-drone" style={{ color: colour }}>
-          {row.drone}
-        </span>
-        <span className={`chip action action-${row.action}`}>{row.action}</span>
+        <span className="trace-t">{row.t.toFixed(1)}</span>
+        <span className="trace-drone">{row.drone}</span>
+        {detailed && <span className="trace-action">{ACTION_WORDS[row.action] ?? row.action.toLowerCase()}</span>}
         <span className="trace-reason">{noEmDash(row.reason)}</span>
-        {(e.frame_id || e.scan) && <span className="evidence-hint">{e.frame_id ? 'IMG' : 'SCAN'}</span>}
+        {detailed && (e.frame_id || e.scan) && <span className="evidence-hint">{e.frame_id ? 'img' : 'scan'}</span>}
       </div>
-      {open && (
+      {open && detailed && (
         <div className="trace-evidence" onClick={(ev) => ev.stopPropagation()}>
           <div className="evidence-row">
             <span>
-              evidence: <b>{e.sensor}</b> = <span className="mono">{noEmDash(fmtValue(e.value))}</span>
+              {e.sensor} <span className="mono">{noEmDash(fmtValue(e.value))}</span>
             </span>
-            {e.frame_id && <span className="mono muted">frame {e.frame_id}</span>}
+            {e.frame_id && <span className="mono">frame {e.frame_id}</span>}
             {det?.gemma?.caption && (
               <span>
-                Gemma: “{noEmDash(det.gemma.caption)}”{det.gemma.conf != null && <span className="muted"> · {det.gemma.conf.toFixed(2)}</span>}
+                Gemma “{noEmDash(det.gemma.caption)}”{det.gemma.conf != null && <span className="mono"> {det.gemma.conf.toFixed(2)}</span>}
               </span>
             )}
           </div>
@@ -101,37 +124,30 @@ function Row({ row, colour, open, onToggle }: { row: TraceRow; colour: string; o
   )
 }
 
-const COLLAPSED_ROWS = 3
+const COMPACT_ROWS = 3
 
 /**
- * Decision trace. Collapsed (default): only the 3 most recent decisions.
- * Expanded: the full history, scrolling, stuck to the bottom unless the user scrolls up.
+ * Decision log. Compact (tile): the 3 most recent decisions, one line each.
+ * Detailed (tile focused): the whole history with action, evidence tags; click a row to
+ * open its evidence (camera frame + boxes + Gemma caption, or the LiDAR scan).
  */
-export function TracePanel({ actions }: { actions?: ReactNode }) {
+export function TracePanel({ detailed = false, actions }: { detailed?: boolean; actions?: ReactNode }) {
   const trace = useSim((s) => s.trace)
-  const hello = useSim((s) => s.hello)
   const listRef = useRef<HTMLUListElement>(null)
   const stick = useRef(true)
   const [open, setOpen] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState(false)
-  const colours = new Map(hello?.drones.map((d) => [d.id, d.colour]))
-  const rows = expanded ? trace : trace.slice(-COLLAPSED_ROWS)
+  const rows = detailed ? trace : trace.slice(-COMPACT_ROWS)
 
   useEffect(() => {
     const el = listRef.current
     if (el && stick.current) el.scrollTop = el.scrollHeight
-  }, [trace, expanded])
+  }, [trace, detailed])
 
   return (
-    <section className={`trace-panel ${expanded ? 'expanded' : 'collapsed'}`}>
+    <div className={`trace-panel ${detailed ? 'detailed' : 'compact'}`}>
       <div className="trace-head">
-        <h2>Decision trace</h2>
-        <span className="trace-count">{trace.length} decisions</span>
-        {trace.length > COLLAPSED_ROWS && (
-          <button className="trace-toggle" onClick={() => setExpanded(!expanded)}>
-            {expanded ? 'Show latest 3' : `Show all (${trace.length})`}
-          </button>
-        )}
+        <h2>Decision log</h2>
+        <span className="trace-count">{trace.length}</span>
         {actions && <div className="trace-actions">{actions}</div>}
       </div>
       <ul
@@ -141,17 +157,17 @@ export function TracePanel({ actions }: { actions?: ReactNode }) {
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 30
         }}
       >
-        {trace.length === 0 && <li className="muted trace-empty">No decisions yet.</li>}
+        {trace.length === 0 && <li className="trace-empty">No decisions yet</li>}
         {rows.map((r) => (
           <Row
             key={r.id}
             row={r}
-            colour={colours.get(r.drone) ?? '#d8dde6'}
+            detailed={detailed}
             open={open === r.id}
             onToggle={() => setOpen(open === r.id ? null : r.id)}
           />
         ))}
       </ul>
-    </section>
+    </div>
   )
 }
