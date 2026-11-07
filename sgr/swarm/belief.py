@@ -10,6 +10,7 @@ import math
 from collections import deque
 
 import numpy as np
+from scipy.ndimage import label
 
 from sgr import config
 from sgr.contracts import CellState, Pose, PriorMap
@@ -38,8 +39,14 @@ class BeliefGrid:
         self._searched_delta: list[tuple[int, int]] = []
         self._hits: dict[tuple[str, int, int], int] = {}  # (drone, i, j) -> consecutive "shorter" scans
         self._clears: dict[tuple[str, int, int], int] = {}
-        self.reachable = self._component(entrance_xy)
+        self.reachable = self._component(entrance_xy)  # prior: free cells connected to the entrance
         self.n_reachable = int(self.reachable.sum())
+        jj, ii = np.nonzero(self.reachable)
+        e = self.world_to_cell(*entrance_xy)
+        k = int(np.argmin((ii - e[0]) ** 2 + (jj - e[1]) ** 2)) if len(ii) else 0
+        self._entrance_cell = (int(ii[k]), int(jj[k])) if len(ii) else e
+        self._reach_version = -1
+        self._reach = self.reachable
 
     @classmethod
     def from_prior(cls, prior: PriorMap, res: float = config.BELIEF_RES) -> BeliefGrid:
@@ -96,8 +103,22 @@ class BeliefGrid:
         return out
 
     def coverage(self) -> float:
-        """Searched fraction of the prior-free cells reachable from the entrance."""
-        return float((self.searched & self.reachable).sum()) / max(1, self.n_reachable)
+        """Searched fraction of the cells still reachable from the entrance on the current belief.
+
+        Uses only what the swarm sensed: a room cut off by debris (blocked_new) drops out of the total,
+        so a tree-shaped building with a blocked branch can still reach 100 %.
+        """
+        reach = self.reachable_now()
+        return float((self.searched & reach).sum()) / max(1, int(reach.sum()))
+
+    def reachable_now(self) -> np.ndarray:
+        if self._reach_version != self.version:
+            open_ = (self.state != WALL) & (self.state != BLOCKED)
+            lab, _ = label(open_)
+            k = lab[self._entrance_cell[1], self._entrance_cell[0]]
+            self._reach = (lab == k) & self.reachable if k > 0 else self.reachable
+            self._reach_version = self.version
+        return self._reach
 
     # ------------------------------------------------------------ ray-marching
     def march(self, x: float, y: float, angles: np.ndarray, max_r: float, opaque: np.ndarray | None = None

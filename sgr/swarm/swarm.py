@@ -5,10 +5,13 @@ the pre-incident plan: walls + the route graph with every edge open.
 
 Block H1-H4: belief grid, camera coverage, area split + greedy assignment, exploration, reflexes,
 heartbeat loss -> reassignment, LiDAR change detection -> blocked cells.
-Later blocks: inspect/relook, hazards from detections, retreat, survivor route + chain.
+H4-H7 (s/inspect): inspect / re-look from 2 m, fire + survivor from detections, heat danger + RETREAT.
+Next: survivor route + REPLAN + chain.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 
@@ -28,8 +31,11 @@ from .areas import Area, assign, release, split_areas
 from .belief import BeliefGrid
 from .blackboard import Blackboard
 from .coverage import camera_footprint
+from .hazards import Hazards
 from .planner import DistanceField, path_hits, snap, cost_map
 from .trace import Trace
+
+SAME_BLOCKAGE_M = 2.5  # new blocked cells this close to a reported blockage extend it (one trace row each)
 
 
 class Swarm:
@@ -40,6 +46,7 @@ class Swarm:
         self.areas: dict[str, Area] = split_areas(self.belief, scenario_prior.graph)
         self.bb = Blackboard()
         self.trace = Trace()
+        self.hazards = Hazards(self.belief, self.bb, self.trace)
         self.agents = {d: Agent(d, scenario_prior.altitude) for d in self.drones}
         self._excluded: dict[str, set[str]] = {d: set() for d in self.drones}
         self._excluded_version = self.belief.version
@@ -56,8 +63,13 @@ class Swarm:
         alive = {d: r for d, r in readings.items() if d not in self.bb.lost}
 
         self._sense(t, alive)
+        poses = {d: r.pose for d, r in alive.items()}
+        for d, r in alive.items():
+            self.hazards.heat(t, d, r.pose, r.temperature, self.agents[d])
         for det in detections:
             self.bb.upsert_detection(det)
+            self.hazards.on_detection(t, det, self.agents, poses)
+        relooks = self.hazards.tick(t, self.agents, poses)
         self._assign(t, alive)
 
         cmds: dict[str, VelCmd] = {}
@@ -85,6 +97,7 @@ class Swarm:
             map_delta=self.belief.pop_map_delta(),
             searched_delta=self.belief.pop_searched_delta(),
             events=self.bb.pop_events(),
+            relook_requests=relooks,
         )
         return cmds, self.trace.drain(), state
 
@@ -118,12 +131,18 @@ class Swarm:
             if blocked:
                 xs = [self.belief.cell_center(i, j) for i, j in blocked]
                 cx, cy = float(np.mean([p[0] for p in xs])), float(np.mean([p[1] for p in xs]))
-                self.trace.log(t, d, "MARK_BLOCKED",
-                               f"{d} LiDAR: {len(blocked)} cell(s) shorter than the plan near ({cx:.1f}, {cy:.1f})",
-                               Evidence(sensor="lidar", value={"cells": [list(c) for c in blocked]},
-                                        scan=[round(x, 2) for x in r.lidar]))
-                self.bb.add_hazard("blocked", (cx, cy), "lidar", t)
-                self.bb.event("blocked", drone=d, xy=(cx, cy))
+                known = [h for h in self.bb.hazards.values() if h.kind == "blocked"
+                         and min(math.hypot(h.xy[0] - x, h.xy[1] - y) for x, y in xs) < SAME_BLOCKAGE_M]
+                if known:  # more cells of a blockage already reported: the map grows, the trace doesn't
+                    for h in known:
+                        h.t = t
+                else:
+                    self.trace.log(t, d, "MARK_BLOCKED",
+                                   f"{d} LiDAR: path blocked near ({cx:.1f}, {cy:.1f}), not on the plan",
+                                   Evidence(sensor="lidar", value={"cells": [list(c) for c in blocked]},
+                                            scan=[round(x, 2) for x in r.lidar]))
+                    self.bb.add_hazard("blocked", (cx, cy), "lidar", t)
+                    self.bb.event("blocked", drone=d, xy=(cx, cy))
             if blocked or cleared:
                 for ag in self.agents.values():
                     if ag.path and path_hits(ag.path, blocked + cleared, self.belief):

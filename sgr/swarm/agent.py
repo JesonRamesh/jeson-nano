@@ -17,7 +17,7 @@ from sgr.contracts import Pose, Readings, VelCmd
 
 from .areas import Area
 from .belief import BeliefGrid
-from .planner import DistanceField, cost_map
+from .planner import DistanceField, astar, cost_map
 
 # tactical
 GOAL_NEAR_CELLS = 3  # a goal is a traversable cell within 0.6 m of an unsearched cell
@@ -27,6 +27,13 @@ RETARGET_EVERY_S = 3.0
 STALL_S = 3.0
 STALL_MIN_PROGRESS = 0.3  # m of path-distance gained per STALL_S window
 SWEEP_WZ = 2.0  # rad/s
+# inspect / retreat (§8.4)
+IN_POSITION_M = 0.4
+FACING_RAD = math.radians(15)
+INSPECT_SPEED = 0.8
+RETREAT_M = 3.0
+RETREAT_SPEED = 1.0
+RETREAT_TIMEOUT_S = 8.0
 # reflex
 SEP_M = 2.0
 SEP_GAIN = 0.8
@@ -49,7 +56,7 @@ class Agent:
     def __init__(self, drone: str, altitude: float) -> None:
         self.id = drone
         self.altitude = altitude
-        self.mode = "IDLE"  # IDLE | TRANSIT | EXPLORING | SWEEP | LOST
+        self.mode = "IDLE"  # IDLE | TRANSIT | EXPLORING | SWEEP | INSPECTING | RETREAT | LOST
         self.area: str | None = None
         self.path: list[tuple[float, float]] | None = None
         self.goal: tuple[int, int] | None = None
@@ -59,6 +66,49 @@ class Agent:
         self._sweep_left = 0.0
         self._v = np.zeros(2)
         self.given_up: np.ndarray | None = None  # cells this drone looked for and could not see (bool [j, i])
+        # inspect: face `_focus`; if `_standoff` is set, fly there first (§8.4)
+        self._focus: tuple[float, float] | None = None
+        self._standoff: tuple[float, float] | None = None
+        self._ipath: list[tuple[float, float]] | None = None
+        self.in_position = False
+        # retreat
+        self._retreat_dir: tuple[float, float] | None = None
+        self._retreat_path: list[tuple[float, float]] | None = None
+        self._retreat_left = 0.0
+        self._retreated = False
+
+    # ---------------------------------------------------------------- orders from the swarm
+    def hold(self, focus: tuple[float, float]) -> None:
+        """Stop and face `focus` (a detection waiting for Gemma)."""
+        self._focus, self._standoff, self._ipath = focus, None, None
+        self.in_position = False
+
+    def approach(self, standoff: tuple[float, float], focus: tuple[float, float]) -> None:
+        """Fly to `standoff` (~2 m in front of the target) and face `focus`, for a closer look."""
+        self._focus, self._standoff, self._ipath = focus, standoff, None
+        self.in_position = False
+
+    def release(self) -> None:
+        """Inspection over: back to exploring."""
+        self._focus = self._standoff = self._ipath = None
+        self.in_position = False
+        if self.mode == "INSPECTING":
+            self.mode = "IDLE"
+        self.invalidate()
+
+    def retreat(self, path: list[tuple[float, float]] | None, away: tuple[float, float]) -> None:
+        """Too hot: follow `path` out of the heat (or back off RETREAT_M along `away`), then drop the goal."""
+        self._retreat_path, self._retreat_dir = path, away
+        self._retreat_left = RETREAT_M if not path else RETREAT_TIMEOUT_S
+        self.mode = "RETREAT"
+        self._retreated = True
+        self._focus = self._standoff = self._ipath = None
+        self.in_position = False
+        self.invalidate()
+
+    @property
+    def inspecting(self) -> bool:
+        return self._focus is not None
 
     # ---------------------------------------------------------------- tactical
     def set_area(self, area: str | None) -> None:
@@ -74,6 +124,10 @@ class Agent:
 
     @property
     def task(self) -> str:
+        if self.mode == "RETREAT":
+            return "backing off the heat"
+        if self._focus is not None:
+            return "closer look" if self._standoff else "waiting for Gemma"
         return f"area {self.area}" if self.area else ""
 
     def _unsearched(self, belief: BeliefGrid, area: Area) -> np.ndarray:
@@ -99,7 +153,7 @@ class Agent:
 
     def _goal_mask(self, belief: BeliefGrid, area: Area) -> np.ndarray:
         cm = cost_map(belief)
-        return binary_dilation(self._unsearched(belief, area), _STRUCT) & cm.traversable
+        return binary_dilation(self._unsearched(belief, area), _STRUCT) & cm.traversable & (belief.heat < 0.99)
 
     def _plan(self, t: float, pose: Pose, belief: BeliefGrid, area: Area) -> bool:
         """Pick the nearest reachable goal near unsearched cells of the area. False = nothing left here."""
@@ -139,7 +193,38 @@ class Agent:
         wz_ff = 0.0
         done = False
 
-        if area is None:
+        if self.mode == "RETREAT":
+            if self._retreat_path:
+                gx, gy = self._retreat_path[-1]
+                self._retreat_left -= config.CONTROL_DT
+                if math.hypot(gx - pose.x, gy - pose.y) > ARRIVE_M and self._retreat_left > 0:
+                    want, _ = self._follow(pose, self._retreat_path, RETREAT_SPEED)
+                else:
+                    self.mode, self._retreat_path = "IDLE", None
+            elif self._retreat_left > 0 and self._retreat_dir is not None:
+                want = np.array(self._retreat_dir) * RETREAT_SPEED
+                self._retreat_left -= RETREAT_SPEED * config.CONTROL_DT
+            else:
+                self.mode = "IDLE"
+        elif self._focus is not None:
+            self.mode = "INSPECTING"
+            fx, fy = self._focus
+            face = math.atan2(fy - pose.y, fx - pose.x)
+            close = True
+            if self._standoff is not None:
+                sx, sy = self._standoff
+                dist = math.hypot(sx - pose.x, sy - pose.y)
+                close = dist < IN_POSITION_M
+                if not close:
+                    if self._ipath is None:
+                        self._ipath = astar(belief, (pose.x, pose.y), self._standoff) or [self._standoff]
+                    want, travel = self._follow(pose, self._ipath, INSPECT_SPEED)
+                    # face the target for the last metre so the camera is already on it
+                    yaw_des = face if dist < 1.0 or travel is None else travel
+            if close:
+                yaw_des = face
+            self.in_position = close and abs(_wrap(face - pose.yaw)) < FACING_RAD
+        elif area is None:
             self.mode = "IDLE"
             wz_ff = 0.6  # slow look-around while waiting
         elif self.mode == "SWEEP" and self._sweep_left > 0:
@@ -151,6 +236,9 @@ class Agent:
                     self._give_up_goal(belief, area)
                 self.invalidate()
         else:
+            if self._retreated:  # don't fly straight back into the heat
+                self._retreated = False
+                self._give_up_goal(belief, area)
             need = (
                 self.path is None
                 or not self._goal_still_useful(belief, area)
@@ -178,15 +266,7 @@ class Agent:
                     else:
                         self.invalidate()
                 else:
-                    pts = np.asarray(self.path)
-                    k = int(np.argmin(np.hypot(pts[:, 0] - pose.x, pts[:, 1] - pose.y)))
-                    cx, cy = pts[min(k + LOOKAHEAD, len(pts) - 1)]
-                    d = np.array([cx - pose.x, cy - pose.y])
-                    n = float(np.linalg.norm(d))
-                    speed = min(config.MAX_SPEED, 0.4 + 1.2 * dist_goal)
-                    if n > 1e-6:
-                        want = d / n * speed
-                        yaw_des = math.atan2(d[1], d[0])
+                    want, yaw_des = self._follow(pose, self.path, config.MAX_SPEED)
 
         # ------------------------------------------------------------ reflex
         v = want + self._separation(pose, others) + self._walls(pose, r.lidar)
@@ -200,6 +280,20 @@ class Agent:
             wz = wz_ff
         vz = ALT_GAIN * (self.altitude - pose.z) if pose.z > 0.05 else 0.0
         return VelCmd(vx=float(self._v[0]), vy=float(self._v[1]), vz=vz, wz=wz), done
+
+    @staticmethod
+    def _follow(pose: Pose, path: list[tuple[float, float]], vmax: float) -> tuple[np.ndarray, float | None]:
+        """Carrot-follow `path`: velocity toward a waypoint LOOKAHEAD ahead, slowing near the end."""
+        pts = np.asarray(path)
+        k = int(np.argmin(np.hypot(pts[:, 0] - pose.x, pts[:, 1] - pose.y)))
+        cx, cy = pts[min(k + LOOKAHEAD, len(pts) - 1)]
+        gx, gy = pts[-1]
+        d = np.array([cx - pose.x, cy - pose.y])
+        n = float(np.linalg.norm(d))
+        if n < 1e-6:
+            return np.zeros(2), None
+        speed = min(vmax, 0.4 + 1.2 * math.hypot(gx - pose.x, gy - pose.y))
+        return d / n * speed, math.atan2(d[1], d[0])
 
     # ---------------------------------------------------------------- reflex terms
     def _separation(self, pose: Pose, others: list[Pose]) -> np.ndarray:
