@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { TraceRow } from '../contracts'
 import { sim, useSim } from '../state/store'
 import { noEmDash } from '../ui/text'
@@ -107,7 +107,7 @@ const COLLAPSED_ROWS = 3
  * Decision trace. Collapsed (default): only the 3 most recent decisions.
  * Expanded: the full history, scrolling, stuck to the bottom unless the user scrolls up.
  */
-export function TracePanel() {
+export function TracePanel({ actions }: { actions?: ReactNode }) {
   const trace = useSim((s) => s.trace)
   const hello = useSim((s) => s.hello)
   const listRef = useRef<HTMLUListElement>(null)
@@ -132,6 +132,7 @@ export function TracePanel() {
             {expanded ? 'Show latest 3' : `Show all (${trace.length})`}
           </button>
         )}
+        {actions && <div className="trace-actions">{actions}</div>}
       </div>
       <ul
         ref={listRef}

@@ -649,19 +649,23 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
   const [clickMode, setClickMode] = useState<ClickMode | null>(null)
   const hello = useSim((s) => s.hello)
   const grid = useFreeGrid(hello?.map.grid_url, hello?.map.resolution)
-  const handleCount = useSim((s) => s.state?.click_handles.length ?? 0)
 
-  // Esc leaves click mode. WASD in Auto / a chase view switches to Free so the keys move the camera.
+  // Keyboard: the judge change tool has no on-screen buttons (kept clean for the audience),
+  // but stays one key away: 1 = drop debris, 2 = drop fire, U = undo, Esc = cancel.
+  // WASD in Auto / a chase view switches to Free so the keys move the camera.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setClickMode(null)
-      if (isTyping(e) || document.pointerLockElement) return
+      if (isTyping(e) || document.pointerLockElement || e.ctrlKey || e.metaKey || e.altKey) return
       const k = e.key.toLowerCase()
+      if (k === '1') setClickMode((m) => (m === 'debris' ? null : 'debris'))
+      if (k === '2') setClickMode((m) => (m === 'fire' ? null : 'fire'))
+      if (k === 'u') undoClick(send)
       if (k.length === 1 && WASD_KEYS.includes(k)) setMode((m) => (m === 'overview' || m === 'free' ? m : 'free'))
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [send])
   const drones = useSim((s) => s.hello?.drones ?? NO_DRONES)
   const hasScan = useSim((s) => !!s.hello?.transform)
   return (
@@ -691,24 +695,13 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
         </SimFrame>
         <CameraRig mode={mode} onShot={setAutoShot} />
       </Canvas>
-      <div className="click-tool">
-        <button className={clickMode === 'debris' ? 'active' : ''} onClick={() => setClickMode(clickMode === 'debris' ? null : 'debris')}>
-          Debris
-        </button>
-        <button
-          className={clickMode === 'fire' ? 'active fire' : 'fire'}
-          onClick={() => setClickMode(clickMode === 'fire' ? null : 'fire')}
-        >
-          Fire
-        </button>
-        <button onClick={() => undoClick(send)} disabled={handleCount === 0}>
-          Undo{handleCount ? ` (${handleCount})` : ''}
-        </button>
-        {clickMode && <span className="click-hint">click the floor to drop {clickMode} · Esc to cancel</span>}
-      </div>
+      {clickMode && (
+        <div className={`click-hint click-hint-${clickMode}`}>
+          Click the floor to drop {clickMode} · Esc to cancel
+        </div>
+      )}
       <div className="scene3d-legend">
         {!hasScan && <span className="muted">no scan.glb: walls from grid.png</span>}
-        {(mode === 'overview' || mode === 'free') && <span className="muted">WASD move · Q/E height · Shift fast</span>}
         {BELIEF_LEGEND.map((l) => (
           <span key={l.label} style={{ color: l.colour }}>
             ■ {l.label}
