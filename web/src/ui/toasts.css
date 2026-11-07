@@ -1,0 +1,24 @@
+.toasts {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.toast {
+  padding: 8px 18px;
+  border-radius: 6px;
+  font-size: 18px;
+  font-weight: 600;
+  background: #262b35;
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+.toast-warn { border-color: var(--warn); color: var(--warn); }
+.toast-error { border-color: var(--bad); color: var(--bad); }
