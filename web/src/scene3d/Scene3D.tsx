@@ -2,7 +2,7 @@ import { Line, OrbitControls, useGLTF } from '@react-three/drei'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Component, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
-import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
+import { SkeletonUtils, type OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { Handle, HelloMsg, Transform } from '../contracts'
 import { useFreeGrid, type FreeGrid } from '../state/grid'
 import { CELL_CODE, sim, useSim, type SimEventMsg } from '../state/store'
@@ -127,23 +127,26 @@ function Environment() {
 
 // ---------------------------------------------------------------- live objects
 
-// W drops a CC0 drone model into scene3d/dressing/ (any *.glb with "drone" in its name).
-// Vite resolves this at build time; with no file it's {} and the spheres are used.
+// W's CC0 drone model lives in scene3d/dressing/ (see its README). Found by glob so the build
+// still works without it (the spheres are used then — cut ladder item 2).
 const DRESSING_GLBS = import.meta.glob('./dressing/*.glb', { eager: true, query: '?url', import: 'default' }) as Record<
   string,
   string
 >
 const DRONE_GLB_URL = Object.entries(DRESSING_GLBS).find(([path]) => /drone/i.test(path))?.[1]
-const DRONE_SIZE = 0.6 // m, model's largest horizontal extent
-// glTF models are Y-up with +Z forward. Inside <SimFrame> (Z-up) rotate X +90° to stand the model
-// up, then Z +90° so its forward points along +X (yaw 0). Adjust MODEL_YAW if W's model faces sideways.
-const MODEL_YAW = Math.PI / 2
+const DRONE_SCALE = 1.25 // model spans 0.5 m (true size); a bit larger reads better on the projector
+const PROPS: [string, number][] = [
+  ['prop_FL', 1],
+  ['prop_RR', 1],
+  ['prop_FR', -1],
+  ['prop_RL', -1],
+]
 
-/** One drone body: the GLB (tinted with the drone colour) or the glowing sphere fallback. */
-function DroneBody({ colour, url }: { colour: string; url?: string }) {
+/** One drone body: W's GLB (accent tinted with the drone colour) or the glowing sphere fallback. */
+function DroneBody({ id, colour, url }: { id: string; colour: string; url?: string }) {
   return url ? (
     <Suspense fallback={<SphereBody colour={colour} />}>
-      <GlbBody colour={colour} url={url} />
+      <GlbBody id={id} colour={colour} url={url} />
     </Suspense>
   ) : (
     <SphereBody colour={colour} />
@@ -155,11 +158,7 @@ function SphereBody({ colour }: { colour: string }) {
     <>
       <mesh>
         <sphereGeometry args={[0.25, 24, 16]} />
-        <meshStandardMaterial
-          color={colour}
-          emissive={colour}
-          emissiveIntensity={1.6}
-        />
+        <meshStandardMaterial color={colour} emissive={colour} emissiveIntensity={1.6} />
       </mesh>
       {/* heading nub along +x */}
       <mesh position={[0.32, 0, 0]} rotation={[0, 0, -Math.PI / 2]}>
@@ -170,38 +169,34 @@ function SphereBody({ colour }: { colour: string }) {
   )
 }
 
-function GlbBody({ colour, url }: { colour: string; url: string }) {
+/** Model axes (README): +Y up, +X forward -> one +90° X rotation inside the z-up SimFrame. */
+function GlbBody({ id, colour, url }: { id: string; colour: string; url: string }) {
   const { scene } = useGLTF(url)
-  const obj = useMemo(() => {
-    const root = scene.clone(true)
-    const c = new THREE.Color(colour)
-    root.traverse((o) => {
+  const model = useMemo(() => {
+    const m = SkeletonUtils.clone(scene) // one copy per drone
+    m.traverse((o) => {
       const mesh = o as THREE.Mesh
-      if (!mesh.isMesh) return
-      // Own material per drone: keep the model's look, add the drone colour as glow.
-      const src = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
-      const m =
-        src instanceof THREE.MeshStandardMaterial ? src.clone() : new THREE.MeshStandardMaterial({ color: '#cfd3da' })
-      m.emissive = c
-      m.emissiveIntensity = 0.9
-      mesh.material = m
+      if (!mesh.isMesh || !(mesh.material instanceof THREE.MeshStandardMaterial)) return
+      const mat = mesh.material.clone() // own materials, so LOST styling is per drone
+      if (mat.name === 'accent') {
+        mat.color.set(colour)
+        mat.emissive.set(colour)
+      }
+      mesh.material = mat
     })
-    // Normalise: centre on the origin and scale to DRONE_SIZE across.
-    const box = new THREE.Box3().setFromObject(root)
-    const size = box.getSize(new THREE.Vector3())
-    const centre = box.getCenter(new THREE.Vector3())
-    const k = DRONE_SIZE / Math.max(size.x, size.z, 1e-6)
-    root.position.sub(centre)
-    const wrap = new THREE.Group()
-    wrap.add(root)
-    wrap.scale.setScalar(k)
-    return wrap
+    return m
   }, [scene, colour])
+  useFrame((_, dt) => {
+    const alive = sim.snap.state?.drones.find((d) => d.id === id)?.alive ?? true
+    if (!alive) return // props stop when the drone is lost
+    for (const [name, dir] of PROPS) {
+      const p = model.getObjectByName(name)
+      if (p) p.rotation.y += dir * 60 * dt
+    }
+  })
   return (
-    <group rotation={[0, 0, MODEL_YAW]}>
-      <group rotation={[Math.PI / 2, 0, 0]}>
-        <primitive object={obj} />
-      </group>
+    <group rotation={[Math.PI / 2, 0, 0]} scale={DRONE_SCALE}>
+      <primitive object={model} />
     </group>
   )
 }
@@ -225,7 +220,8 @@ function Drones() {
       g.rotation.z = d.yaw
       // LOST: glow off, light off, tilted on the floor
       g.rotation.x = d.alive ? 0 : 0.5
-      const glow = d.alive ? (DRONE_GLB_URL ? 0.9 : 1.6) : 0
+      // LOST: every emissive part (sphere / model accent + nav lights) goes dark
+      const glow = d.alive ? (DRONE_GLB_URL ? 1.2 : 1.6) : 0
       g.traverse((o) => {
         const m = (o as THREE.Mesh).material
         if (m instanceof THREE.MeshStandardMaterial) m.emissiveIntensity = glow
@@ -238,7 +234,7 @@ function Drones() {
     <>
       {ids.map((d) => (
         <group key={d.id} ref={(g) => void (refs.current[d.id] = g)}>
-          <DroneBody colour={d.colour} url={DRONE_GLB_URL} />
+          <DroneBody id={d.id} colour={d.colour} url={DRONE_GLB_URL} />
           <pointLight ref={(l) => void (lights.current[d.id] = l)} color={d.colour} intensity={1.5} distance={3} />
         </group>
       ))}
@@ -485,8 +481,14 @@ function CameraRig({ mode }: { mode: CamMode }) {
       // Chase: 2.5 m behind and 3 m above the drone (clear of the 2.6 m walls), looking ahead.
       const d = sim.snap.state?.drones.find((x) => x.id === mode)
       if (!d) return
-      toThree(d.x - 2.5 * Math.cos(d.yaw), d.y - 2.5 * Math.sin(d.yaw), d.z + 3, tmpPos)
-      toThree(d.x + 2.5 * Math.cos(d.yaw), d.y + 2.5 * Math.sin(d.yaw), 0, tmpTarget)
+      if (d.alive) {
+        toThree(d.x - 2.5 * Math.cos(d.yaw), d.y - 2.5 * Math.sin(d.yaw), d.z + 3, tmpPos)
+        toThree(d.x + 2.5 * Math.cos(d.yaw), d.y + 2.5 * Math.sin(d.yaw), 0, tmpTarget)
+      } else {
+        // a lost drone lies on the floor: look down at it from above instead
+        toThree(d.x, d.y - 1.5, 6, tmpPos)
+        toThree(d.x, d.y, 0, tmpTarget)
+      }
     }
     camera.position.lerp(tmpPos, k)
     if (ctl) {
