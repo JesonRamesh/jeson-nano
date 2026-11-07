@@ -36,6 +36,7 @@ HOT_M = 3.0  # assume a confirmed fire is too hot (> 70 °C) this close: heat_no
 WARM_M = 4.0  # ... fading to 0 here (planner cost; no exploration goals in the hot core)
 RETREAT_CLEAR_M = 3.5  # retreat to the nearest reachable spot at least this far from the heat
 RETREAT_COOLDOWN_S = 4.0
+REJECTED_MERGE_M = 1.0  # a new detection this close to a rejected one (same label) is ignored
 _RING = np.radians(np.arange(0, 360, 15))
 
 
@@ -60,6 +61,8 @@ class Hazards:
     active: dict[str, Inspection] = field(default_factory=dict)
     done: set[str] = field(default_factory=set)  # detection ids already settled
     _last_retreat: dict[str, float] = field(default_factory=dict)
+    rejected: list[tuple[str, float, float]] = field(default_factory=list)  # (label, x, y) ruled out before
+    fresh_fire: list[tuple[str, str, list[tuple[int, int]]]] = field(default_factory=list)  # (sensor, drone, cells)
 
     # ------------------------------------------------------------------ detections
     def on_detection(self, t: float, det: Detection, agents: dict[str, Agent], alive: dict[str, Pose]) -> None:
@@ -69,6 +72,10 @@ class Hazards:
         what = _what(det)
         ins = self.active.get(det.id)
         if det.status == "pending":
+            if ins is None and any(lab == det.label and math.hypot(x - xy[0], y - xy[1]) <= REJECTED_MERGE_M
+                                   for lab, x, y in self.rejected):
+                self.done.add(det.id)  # same spot was already ruled out: don't stop for it again
+                return
             if ins is None:
                 d = self._pick_drone(det.drone, xy, agents, alive)
                 ins = self.active[det.id] = Inspection(det.id, det.label, xy, d, "hold", t)
@@ -116,7 +123,9 @@ class Hazards:
                                _gemma_evidence(det))
                 self.bb.event("survivor_found", drone=det.drone, xy=xy)
             else:
-                cells = self.mark_fire(xy, agents)
+                new_cells = self.mark_fire(xy, agents)
+                cells = len(new_cells)
+                self.fresh_fire.append(("gemma" if det.gemma else "camera", det.drone, new_cells))
                 self.bb.add_hazard("fire", xy, "gemma" if det.gemma else "camera", t, det.combined or det.score_fast)
                 self.trace.log(t, det.drone, "CONFIRM_HAZARD",
                                f"Fire confirmed at ({xy[0]:.1f}, {xy[1]:.1f}): {_scores(det)}; "
@@ -175,7 +184,7 @@ class Hazards:
             self.bb.add_hazard("danger", (pose.x, pose.y), "temp", t)
 
     # ------------------------------------------------------------------ helpers
-    def mark_fire(self, xy: tuple[float, float], agents: dict[str, Agent]) -> int:
+    def mark_fire(self, xy: tuple[float, float], agents: dict[str, Agent]) -> list[tuple[int, int]]:
         for i, j in self._disc(*xy, WARM_M):  # assumed hot zone around the fire
             cx, cy = self.belief.cell_center(i, j)
             norm = min(1.0, max(0.0, (WARM_M - math.hypot(cx - xy[0], cy - xy[1])) / (WARM_M - HOT_M)))
@@ -188,16 +197,18 @@ class Hazards:
         for ag in agents.values():
             if ag.path and path_hits(ag.path, new, self.belief, margin=1.0):
                 ag.invalidate()
-        return len(new)
+        return new
 
     def _settle(self, det: Detection, agents: dict[str, Agent]) -> None:
         self.done.add(det.id)
+        if det.status in ("rejected", "low_conf", "unconfirmed") and det.world_xy is not None:
+            self.rejected.append((det.label, det.world_xy.x, det.world_xy.y))
         ins = self.active.pop(det.id, None)
         if ins and ins.drone:
             agents[ins.drone].release()
 
     def _pick_drone(self, preferred: str | None, xy, agents: dict[str, Agent], alive: dict[str, Pose]) -> str | None:
-        busy = {i.drone for i in self.active.values() if i.drone}
+        busy = {i.drone for i in self.active.values() if i.drone} | {d for d, a in agents.items() if a.stationed}
         if preferred in alive and preferred not in busy and agents[preferred].mode != "RETREAT":
             return preferred
         free = [d for d in alive if d not in busy and agents[d].mode != "RETREAT"]

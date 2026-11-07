@@ -1,14 +1,13 @@
 """Smoke test = the merge gate (§12). Headless, mock perception, test map, max speed.
 
-`test_act1_beats` is xfail until the real swarm + mock perception exist. When it starts
-passing (XPASS), remove the xfail marker so it guards every merge.
+`test_act1_beats` checks the Act 1 beats end to end on maps/test (decoy rejected, re-plan, flare-up
+victim lost, survivor confirmed, chain formed).
 """
 
 from __future__ import annotations
 
 import math
 
-import pytest
 
 from sgr.contracts import PriorMap, Scenario
 from sgr.guidance import Guidance
@@ -42,14 +41,14 @@ def test_loop_runs_headless(test_map) -> None:
     loop.run(max_ticks=TICKS)
     assert loop.ticks == TICKS
     assert math.isclose(loop.t, TICKS * 0.1, rel_tol=1e-6)
-    assert "D3" in loop.dead  # flare-up at t=65 s
+    # flare-up at t=65 s hits the drone nearest a fire (the fire watcher), else scenario.flare.target
+    assert loop.flare_victim is not None and loop.flare_victim in loop.dead
     # ...and the flare-up really placed a fire (regression: clearance check refused it)
     h = loop.flare_fire
     assert h is not None, "flare-up fire was not placed"
     assert any(math.hypot(f.x - h.x, f.y - h.y) < 0.1 for f in loop.world.ground_truth().fires)
 
 
-@pytest.mark.xfail(reason="needs the real Swarm (S, H1-H7) and mock Perception (P)", strict=False)
 def test_act1_beats(test_map) -> None:
     loop = _loop(test_map)
     loop.run(max_ticks=TICKS)
@@ -57,9 +56,12 @@ def test_act1_beats(test_map) -> None:
     assert "SURVIVOR_CONFIRMED" in actions, "survivor never confirmed"
     assert "REPLAN" in actions, "no REPLAN"
     assert "REJECT_DETECTION" in actions, "no REJECT_DETECTION"
-    assert any(
-        r.action == "DRONE_LOST" and (r.drone == "D3" or "D3" in r.reason) for r in loop.trace
-    ), "D3 never declared lost"
+    assert "CONFIRM_HAZARD" in actions, "fire never confirmed"
+    victim = loop.flare_victim
+    assert any(r.action == "DRONE_LOST" and r.drone == victim for r in loop.trace), f"{victim} never declared lost"
+    st = loop.swarm_state
+    assert st.chain_formed and st.route.status == "ok", "no chain / no safe route at the end"
+    assert victim not in {c.drone for c in st.checkpoints}, "a lost drone still holds a checkpoint"
 
 
 def test_swarm_covers_test_map(test_map) -> None:

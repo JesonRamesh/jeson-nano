@@ -8,12 +8,12 @@ Layout (metres, x east, y north). Corridors are 1.8 m wide.
 
     y=17   n6 ==================== n7
             ||                      ||
-    y=10   n4 ==== room n5         n8 ==== survivor room n9
+    y=10   n4 ==== room n5 (fire)  n8 ==== survivor room n9
      (left dead-end room)           ||
             ||                      ||
     y=5.6 n11 (closet)
           ||
-    y=3  n1 == n2 ====[e2 debris]== n3 ======= n10 (fire spur)
+    y=3  n1 == n2 ====[e2 debris]== n3 ======= n10 (spur)
        entrance
 
 - Loop: n2-n4-n6-n7-n8-n3-n2.
@@ -100,7 +100,7 @@ def build_scenario() -> Scenario:
         entrance=Entrance(x=2.0, y=3.0, yaw=0.0),
         graph=Graph(nodes=NODES, edges=EDGES),
         compromised=[Compromise(edge="e2", at=0.5, kind="debris")],
-        fires=[Fire(x=25.5, y=3.0, size=1.5)],
+        fires=[Fire(x=1.6, y=12.0, size=1.5)],  # far corner of the left dead-end room: found early, off the route
         survivor=Survivor(x=26.5, y=11.0, yaw=1.2),
         decoy=Decoy(x=8.7, y=6.5, kind="orange_panel"),
         drones=DroneSetup(

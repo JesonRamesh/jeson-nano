@@ -56,7 +56,7 @@ class Agent:
     def __init__(self, drone: str, altitude: float) -> None:
         self.id = drone
         self.altitude = altitude
-        self.mode = "IDLE"  # IDLE | TRANSIT | EXPLORING | SWEEP | INSPECTING | RETREAT | LOST
+        self.mode = "IDLE"  # IDLE | TRANSIT | EXPLORING | SWEEP | INSPECTING | RETREAT | CHAIN | WATCHING | LOST
         self.area: str | None = None
         self.path: list[tuple[float, float]] | None = None
         self.goal: tuple[int, int] | None = None
@@ -76,6 +76,13 @@ class Agent:
         self._retreat_path: list[tuple[float, float]] | None = None
         self._retreat_left = 0.0
         self._retreated = False
+        # station (chain position / fire watch): fly to `_station`, hold; face `_station_face` or sweep
+        self._station: tuple[float, float] | None = None
+        self._station_face: tuple[float, float] | None = None
+        self._station_sweep = False
+        self._station_mode = "CHAIN"
+        self._station_task = ""
+        self._spath: list[tuple[float, float]] | None = None
 
     # ---------------------------------------------------------------- orders from the swarm
     def hold(self, focus: tuple[float, float]) -> None:
@@ -106,6 +113,25 @@ class Agent:
         self.in_position = False
         self.invalidate()
 
+    def station(self, xy: tuple[float, float], face: tuple[float, float] | None = None, sweep: bool = False,
+                mode: str = "CHAIN", task: str = "") -> None:
+        """Hold a fixed spot (chain checkpoint / fire watch) until `unstation()`; replaces exploring."""
+        if self._station != xy:
+            self._spath = None
+        self._station, self._station_face, self._station_sweep = xy, face, sweep
+        self._station_mode, self._station_task = mode, task
+
+    def unstation(self) -> None:
+        self._station = self._station_face = self._spath = None
+        self._station_sweep = False
+        if self.mode in ("CHAIN", "WATCHING"):
+            self.mode = "IDLE"
+        self.invalidate()
+
+    @property
+    def stationed(self) -> bool:
+        return self._station is not None
+
     @property
     def inspecting(self) -> bool:
         return self._focus is not None
@@ -119,6 +145,7 @@ class Agent:
     def invalidate(self) -> None:
         """Drop the current path (blocked / new area); a new one is planned next tick."""
         self.path, self.goal = None, None
+        self._spath = None
         if self.mode == "SWEEP":
             self._sweep_left = 0.0
 
@@ -128,6 +155,8 @@ class Agent:
             return "backing off the heat"
         if self._focus is not None:
             return "closer look" if self._standoff else "waiting for Gemma"
+        if self._station is not None:
+            return self._station_task
         return f"area {self.area}" if self.area else ""
 
     def _unsearched(self, belief: BeliefGrid, area: Area) -> np.ndarray:
@@ -201,6 +230,8 @@ class Agent:
                     want, _ = self._follow(pose, self._retreat_path, RETREAT_SPEED)
                 else:
                     self.mode, self._retreat_path = "IDLE", None
+                    if self._station is not None:  # the post was too hot: hold here instead
+                        self._station, self._spath = (pose.x, pose.y), None
             elif self._retreat_left > 0 and self._retreat_dir is not None:
                 want = np.array(self._retreat_dir) * RETREAT_SPEED
                 self._retreat_left -= RETREAT_SPEED * config.CONTROL_DT
@@ -224,6 +255,22 @@ class Agent:
             if close:
                 yaw_des = face
             self.in_position = close and abs(_wrap(face - pose.yaw)) < FACING_RAD
+        elif self._station is not None:
+            self.mode = self._station_mode
+            sx, sy = self._station
+            dist = math.hypot(sx - pose.x, sy - pose.y)
+            if dist > IN_POSITION_M:
+                if self._spath is None:
+                    self._spath = astar(belief, (pose.x, pose.y), self._station) or [self._station]
+                want, yaw_des = self._follow(pose, self._spath, config.MAX_SPEED)
+                if dist < 1.0 and self._station_face is not None:
+                    fx, fy = self._station_face
+                    yaw_des = math.atan2(fy - pose.y, fx - pose.x)
+            elif self._station_sweep:
+                wz_ff = 0.8  # sentinel: slow yaw sweep of its stretch of route
+            elif self._station_face is not None:
+                fx, fy = self._station_face
+                yaw_des = math.atan2(fy - pose.y, fx - pose.x)
         elif area is None:
             self.mode = "IDLE"
             wz_ff = 0.6  # slow look-around while waiting

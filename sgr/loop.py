@@ -35,6 +35,7 @@ from sgr.contracts import (
     UndoMsg,
 )
 
+FLARE_NEAR_M = 6.0  # flare-up hits the drone nearest a fire if it is this close, else scenario.flare.target
 _MOCK_FRAME = np.zeros((config.CAM_H, config.CAM_W, 3), dtype=np.uint8)
 
 
@@ -65,6 +66,7 @@ class SimLoop:
         self.swarm_state: SwarmState | None = None
         self._flared = False
         self.flare_fire: Handle | None = None
+        self.flare_victim: str | None = None
         self._frame_seq = 0
         self._cam_rr = 0
         self._last_state_pub = -math.inf
@@ -90,13 +92,16 @@ class SimLoop:
         # 1 inbound commands
         self._drain_commands()
         # 2 timed events: flare-up (§7.4)
-        if s.flare and not self._flared and self.t >= s.flare.t and s.flare.target not in self.dead:
-            p = w.drone_pose(s.flare.target)
-            # force: bypass the 1 m click clearance (the victim drone is AT this spot).
-            # Not pushed on click_stack, so Undo can't remove the flare-up fire.
-            self.flare_fire = w.place_fire(p.x, p.y, force=True)
-            w.kill_drone(s.flare.target)
-            self.dead.add(s.flare.target)
+        if s.flare and not self._flared and self.t >= s.flare.t:
+            victim = self._flare_victim()
+            if victim is not None:
+                p = w.drone_pose(victim)
+                # force: bypass the 1 m click clearance (the victim drone is AT this spot).
+                # Not pushed on click_stack, so Undo can't remove the flare-up fire.
+                self.flare_fire = w.place_fire(p.x, p.y, force=True)
+                w.kill_drone(victim)
+                self.dead.add(victim)
+                self.flare_victim = victim
             self._flared = True
         # 3 sensors (a dead drone publishes nothing = no heartbeat)
         alive = [d for d in s.drones.ids if d not in self.dead]
@@ -153,6 +158,29 @@ class SimLoop:
             self._publish(self.budget.message(self.perception.metrics(), self.speed))
 
     # ------------------------------------------------------------------
+    def _flare_victim(self) -> str | None:
+        """The flare-up hits the alive drone nearest a burning fire (the one watching it, §5 beat).
+
+        Simulation side, so reading the World's real fires is fine here (never in sgr/swarm).
+        Falls back to scenario.flare.target when nothing is burning.
+        """
+        alive = [d for d in self.scenario.drones.ids if d not in self.dead]
+        if not alive:
+            return None
+        gt = getattr(self.world, "ground_truth", None)
+        fires = gt().fires if gt else []
+        if not fires:
+            return self.scenario.flare.target if self.scenario.flare.target in alive else None
+
+        def dist(d: str) -> float:
+            p = self.world.drone_pose(d)
+            return min(math.hypot(p.x - f.x, p.y - f.y) for f in fires)
+
+        best = min(alive, key=dist)
+        if dist(best) <= FLARE_NEAR_M:
+            return best
+        return self.scenario.flare.target if self.scenario.flare.target in alive else best
+
     def _submit_frame(self, drone: str, pose: Pose) -> None:
         self._frame_seq += 1
         frame_id = f"{drone}-{self._frame_seq}"
