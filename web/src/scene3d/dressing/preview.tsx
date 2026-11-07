@@ -25,12 +25,25 @@ const VIEWS: Record<string, [number[], number[]]> = {
 }
 const toThree = (p: number[]) => new THREE.Vector3(p[0], p[2], -p[1])
 
+// Same look as Scene3D's ScanModel: unlit (baked photo lighting), double-sided, ceiling cut at 2.3 m.
+const CEILING_CUT = [new THREE.Plane(new THREE.Vector3(0, -1, 0), 2.3)]
+
 function Scan({ transform }: { transform: Transform }) {
   const { scene } = useGLTF(`/maps/${MAP}/scan.glb`)
+  const unlit = useMemo(() => {
+    const copy = scene.clone(true)
+    copy.traverse((o) => {
+      const mesh = o as THREE.Mesh
+      if (!mesh.isMesh) return
+      const old = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.MeshStandardMaterial
+      mesh.material = new THREE.MeshBasicMaterial({ map: old.map ?? null, side: THREE.DoubleSide, clippingPlanes: CEILING_CUT })
+    })
+    return copy
+  }, [scene])
   const m = useMemo(() => new THREE.Matrix4().set(...(transform.M.flat() as Parameters<THREE.Matrix4['set']>)), [transform])
   return (
     <group matrix={m} matrixAutoUpdate={false}>
-      <primitive object={scene} />
+      <primitive object={unlit} />
     </group>
   )
 }
@@ -46,7 +59,13 @@ function App() {
   if (!tf || !sc) return null
   const size: [number, number] = [tf.grid_size[0] * tf.pitch, tf.grid_size[1] * tf.pitch]
   return (
-    <Canvas camera={{ fov: 50, near: 0.05, far: 500, position: toThree(cam) }} dpr={1}>
+    <Canvas
+      camera={{ fov: 50, near: 0.05, far: 500, position: toThree(cam) }}
+      dpr={1}
+      onCreated={({ gl }) => {
+        gl.localClippingEnabled = true
+      }}
+    >
       <color attach="background" args={['#0e1014']} />
       {/* same lights as Scene3D */}
       <hemisphereLight args={['#c8d2e0', '#202020', 0.9]} />

@@ -79,5 +79,10 @@ import { Dressing } from './dressing'
 - **Switches:** `?dressing=off` and `?dressing=lite` (no smoke or dust, thinner fog).
 - **Cost:** not measurable on an M4 Pro at 1080p (700–800 FPS with or without it).
   Lights: 4 beacons plus 1 per fire.
+- **Works with the unlit scan + 2.3 m dollhouse cut (#33).** Lights don't reach the unlit scan,
+  so firelight and the emergency red are faked with tinted floor pools and halos that
+  flicker or pulse with them. Rubble is unlit too, with baked shading. Smoke spreads and the
+  beacons hang below 2.3 m. The fog is smoky grey-brown, thick at drone height and thin from
+  the overview camera.
 - **Preview without the sim:** `npm run dev` + `uv run python -m sgr.server.dev --map maps/<name>`, then
   open `/src/scene3d/dressing/preview.html?map=<name>&view=overview|fire|rubble|corridor|hall`.

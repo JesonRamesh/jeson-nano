@@ -80,7 +80,7 @@ export function Dressing({ mapName, size, nodes, reveal = 'belief' }: DressingPr
   const lite = MODE === 'lite'
   return (
     <group name="dressing">
-      <Atmosphere width={w} height={h} nodes={graphNodes} fog={lite ? 0.01 : 0.016} />
+      <Atmosphere width={w} height={h} nodes={graphNodes} fog={lite ? 0.025 : 0.045} />
       {fires.map((f, i) => (
         <FireFX key={`f${i}-${f.x.toFixed(1)}-${f.y.toFixed(1)}`} x={f.x} y={f.y} size={f.size} smoke={!lite} />
       ))}

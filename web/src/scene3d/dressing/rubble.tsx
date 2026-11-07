@@ -7,12 +7,14 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { rng } from './hazards'
 import { smokePuff } from './textures'
 
-const CONCRETE = new THREE.Color('#7d7a74')
-const CONCRETE_LIGHT = new THREE.Color('#99958d')
-const BRICK = new THREE.Color('#7a4c3e')
-const WOOD = new THREE.Color('#6a4a30')
-const STEEL = new THREE.Color('#4b4e54')
-const RUST = new THREE.Color('#6b3a22')
+const CONCRETE = new THREE.Color('#a29e97')
+const CONCRETE_LIGHT = new THREE.Color('#bdb8b0')
+const BRICK = new THREE.Color('#9a5f4c')
+const WOOD = new THREE.Color('#8a6442')
+const STEEL = new THREE.Color('#6d7178')
+const RUST = new THREE.Color('#8a4c2c')
+
+const LIGHT = new THREE.Vector3(0.35, 0.25, 0.9).normalize()
 
 function prep(g: THREE.BufferGeometry, color: THREE.Color, rand: () => number, m: THREE.Matrix4) {
   let geo = g.index ? g.toNonIndexed() : g
@@ -22,8 +24,12 @@ function prep(g: THREE.BufferGeometry, color: THREE.Color, rand: () => number, m
   const n = geo.attributes.position.count
   const col = new Float32Array(n * 3)
   const c = color.clone().offsetHSL(0, 0, (rand() - 0.5) * 0.12)
+  const nrm = geo.attributes.normal as THREE.BufferAttribute
   for (let i = 0; i < n; i += 3) {
-    const k = 0.88 + rand() * 0.24 // per-face variation
+    // baked shading (the dashboard scan is unlit, so the rubble is too): faces toward a
+    // soft overhead light are brighter, plus per-face variation
+    const lit = Math.max(0, nrm.getX(i) * LIGHT.x + nrm.getY(i) * LIGHT.y + nrm.getZ(i) * LIGHT.z)
+    const k = (0.42 + 0.58 * lit) * (0.9 + rand() * 0.2)
     for (let v = 0; v < 3; v++) {
       col[(i + v) * 3] = c.r * k
       col[(i + v) * 3 + 1] = c.g * k
@@ -124,7 +130,7 @@ function rubbleGeometry(seed: number): THREE.BufferGeometry {
   return merged
 }
 
-const rubbleMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 1, metalness: 0 })
+const rubbleMat = new THREE.MeshBasicMaterial({ vertexColors: true }) // unlit, shading baked into the colours
 
 export function RubblePile({ x, y, yaw = 0, seed = 1, dust = true }: { x: number; y: number; yaw?: number; seed?: number; dust?: boolean }) {
   const geo = useMemo(() => rubbleGeometry(seed), [seed])

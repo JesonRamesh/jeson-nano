@@ -61,3 +61,16 @@ export const scorch = () =>
       g.fillRect(0, 0, s, s)
     }
   })
+
+/** Light pool / halo: bright centre, long soft falloff (stands in for real lighting on the
+ *  unlit scan). */
+export const glow = () =>
+  canvasTex('glow', 128, (g, s) => {
+    const r = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2)
+    r.addColorStop(0, 'rgba(255,255,255,1)')
+    r.addColorStop(0.2, 'rgba(255,255,255,0.6)')
+    r.addColorStop(0.5, 'rgba(255,255,255,0.18)')
+    r.addColorStop(1, 'rgba(255,255,255,0)')
+    g.fillStyle = r
+    g.fillRect(0, 0, s, s)
+  })
