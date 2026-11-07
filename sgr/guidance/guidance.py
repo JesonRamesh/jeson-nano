@@ -39,6 +39,9 @@ from sgr.contracts import Evidence, GuidanceMsg, Pose, PriorMap, SwarmState, Tra
 from .geometry import Pt, bearing, point_at, project, seg_dist, wrap
 
 LEAD_AHEAD_M = 3.0
+ARROW_MIN_M = 0.6  # shortest arrow lookahead (tight corners, narrow gaps)
+ARROW_CHORD_TOL_M = 0.25  # the straight line to the arrow target may leave the route by at most this
+LEAD_CARROT_M = 1.0  # the lead drone steps along the route, never straight through walls
 FOLLOW_GAP_M = 6.0
 HANDOVER_M = 2.0
 DRIFT_M = 2.0
@@ -130,17 +133,14 @@ class Guidance:
         proj = project(route, p) if len(route) >= 2 else None
         total = proj and sum(math.dist(a, b) for a, b in zip(route, route[1:]))
         remaining = (total - proj.s) if proj else 0.0
-        target = self._target(route, proj)
+        target = self._target(route, proj, p)
         arrow = math.degrees(wrap(bearing(p, target) - ff.yaw)) if target else 0.0
 
         cmds: dict[str, VelCmd] = {}
         lead_waits = False
         if proj and not self.complete and self.world is not None:
             self._handover(swarm, route, proj, p)
-            lead_waits = self._lead_cmd(route, proj, p, cmds)
-            if lead_waits:
-                target = self._pose_xy(self.lead) or target
-                arrow = math.degrees(wrap(bearing(p, target) - ff.yaw)) if target else arrow
+            lead_waits = self._lead_cmd(route, proj, p, cmds)  # the arrow keeps following the route
 
         key, text, sev, alarm = self._rule(t, ff, p, swarm, route, proj, status, lead_waits)
         say = text if key != self._key else None
@@ -247,10 +247,21 @@ class Guidance:
         ahead = [a for a in ahead if a[0] > proj.s + 0.5]
         return min(ahead)[1] if ahead else None
 
-    def _target(self, route, proj) -> Pt | None:
+    def _target(self, route, proj, p: Pt) -> Pt | None:
+        """Arrow target: the farthest route point up to 3 m ahead whose straight line from the firefighter
+        stays within 0.25 m of the route. On straights that's 3 m ahead; at a tight corner or a narrow
+        gap it shrinks to the corner, so the arrow never points into a wall or debris. A firefighter
+        who has drifted off the route gets the short arrow: straight back onto it."""
         if not proj:
             return None
-        return point_at(route, proj.s + LEAD_AHEAD_M)
+        L = LEAD_AHEAD_M
+        while L > ARROW_MIN_M:
+            tgt = point_at(route, proj.s + L)
+            k = int(L / 0.2)
+            if all(seg_dist(point_at(route, proj.s + L * i / k), p, tgt) <= ARROW_CHORD_TOL_M for i in range(1, k)):
+                return tgt
+            L -= 0.25
+        return point_at(route, proj.s + ARROW_MIN_M)
 
     def _pose_xy(self, drone: str | None) -> Pt | None:
         if drone is None or self.world is None:
@@ -281,7 +292,10 @@ class Guidance:
         if lead_s - proj.s > FOLLOW_GAP_M or math.dist(p, (q.x, q.y)) > FOLLOW_GAP_M + 1.0:
             cmds[self.lead] = VelCmd(vz=LEAD_GAIN * (self.altitude - q.z), wz=self._face(q, p))
             return True
-        goal = point_at(route, proj.s + LEAD_AHEAD_M)
+        # step along the route towards the goal (3 m ahead of the FF), never straight through walls
+        goal_s = proj.s + LEAD_AHEAD_M
+        step = max(-LEAD_CARROT_M, min(LEAD_CARROT_M, goal_s - lead_s))
+        goal = point_at(route, lead_s + step)
         vx, vy = LEAD_GAIN * (goal[0] - q.x), LEAD_GAIN * (goal[1] - q.y)
         n = math.hypot(vx, vy)
         if n > config.MAX_SPEED:
