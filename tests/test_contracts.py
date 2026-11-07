@@ -41,6 +41,7 @@ SCENARIO = c.Scenario(
     drones=c.DroneSetup(start=[(2, 2.5), (2, 3.5), (2.5, 2.5), (2.5, 3.5)]),
     flare=c.Flare(t=65, target="D3"),
     beats=c.Beats(decoy_drone="D2", d3_area_node="n2"),
+    checkpoints=[c.Checkpoint(x=8, y=3, node="n2")],
 )
 
 EXAMPLES: dict[type[BaseModel], BaseModel] = {
@@ -80,7 +81,7 @@ EXAMPLES: dict[type[BaseModel], BaseModel] = {
     c.TraceRow: c.TraceRow(**ROW),
     c.Route: ROUTE,
     c.OldRoute: c.OldRoute(points=[(2, 3), (14, 3)], until=80.0),
-    c.Checkpoint: c.Checkpoint(x=8, y=10, drone="D4"),
+    c.Checkpoint: c.Checkpoint(x=8, y=10, drone="D4", node="n4"),
     c.SurvivorState: SURV,
     c.DroneState: DRONE,
     c.FFState: c.FFState(x=2, y=3, yaw=0),
@@ -116,6 +117,7 @@ EXAMPLES: dict[type[BaseModel], BaseModel] = {
     c.SwarmState: c.SwarmState(
         t=10, phase="explore", drones=[c.SwarmDrone(id="D1", status="EXPLORING")], route=ROUTE,
         survivor=SURV, chain_formed=True, lead="D1", map_delta=[(1, 2, "unsafe")], searched_delta=[(1, 2)], events=[EVENT],
+        relook_requests=["det0001"],
     ),
     c.PriorMap: c.PriorMap(
         name="test", resolution=0.1, origin=(0, 0), size=(300, 200), entrance=ENTRANCE, graph=GRAPH,
@@ -136,7 +138,7 @@ def _contract_models() -> set[type[BaseModel]]:
 
 
 def test_contract_version() -> None:
-    assert c.CONTRACT_VERSION == 1
+    assert c.CONTRACT_VERSION == 2
 
 
 def test_every_model_has_an_example() -> None:
@@ -183,3 +185,17 @@ def test_test_map_scenario_loads(test_map) -> None:
     assert prior.free.shape == (200, 300)
     assert prior.free[int(sc.entrance.y / 0.1), int(sc.entrance.x / 0.1)]
     assert not hasattr(prior, "compromised") and not hasattr(prior, "survivor")
+    assert not hasattr(prior, "checkpoints")  # authored checkpoints sit on the survivor: never in the prior
+
+
+def test_marshgate_checkpoints_load() -> None:
+    """W's real map: the three authored checkpoints survive Scenario.load (contract v2)."""
+    from pathlib import Path
+
+    sc = c.Scenario.load(Path(__file__).resolve().parents[1] / "maps" / "marshgate-route")
+    assert [cp.node for cp in sc.checkpoints] == ["n4", "n13", "n16"]
+    assert all(cp.drone is None for cp in sc.checkpoints)
+
+
+def test_old_scenario_without_checkpoints_still_loads(test_map) -> None:
+    assert c.Scenario.load(test_map).checkpoints == []

@@ -15,10 +15,11 @@ dependencies = [
     "scikit-image",
     "httpx",
     "pillow",
+    "scipy",                    # explicit: inflation / distance transforms in sgr/swarm (already pulled in by scikit-image)
 ]
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["pytest", "matplotlib"]
 
 [project.scripts]
 sgr = "sgr.app:main"
