@@ -2,10 +2,10 @@ import { Line, OrbitControls, useGLTF } from '@react-three/drei'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Component, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
-import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
-import type { EventMsg, Handle, HelloMsg, Transform } from '../contracts'
+import { SkeletonUtils, type OrbitControls as OrbitControlsImpl } from 'three-stdlib'
+import type { Handle, HelloMsg, Transform } from '../contracts'
 import { useFreeGrid, type FreeGrid } from '../state/grid'
-import { CELL_CODE, sim, useSim } from '../state/store'
+import { CELL_CODE, sim, useSim, type SimEventMsg } from '../state/store'
 import { DEBRIS_SIZE } from './constants'
 import { mergeWalls } from './walls'
 
@@ -16,9 +16,22 @@ import { mergeWalls } from './walls'
 
 const WALL_H = 2.6
 const BELIEF_CAP = 4000 // max instanced belief cells per layer
+const MAX_FPS = 30
 const NO_DRONES: { id: string; colour: string }[] = []
 
 type CamMode = 'auto' | 'overview' | 'free' | string // string = drone id (chase)
+
+/** Renders at most `fps` frames per second (with frameloop="demand"); stops when the tab is hidden. */
+function FrameCap({ fps }: { fps: number }) {
+  const invalidate = useThree((s) => s.invalidate)
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!document.hidden) invalidate()
+    }, 1000 / fps)
+    return () => clearInterval(id)
+  }, [fps, invalidate])
+  return null
+}
 
 function SimFrame({ children }: { children: ReactNode }) {
   return <group rotation={[-Math.PI / 2, 0, 0]}>{children}</group>
@@ -26,7 +39,8 @@ function SimFrame({ children }: { children: ReactNode }) {
 
 // ---------------------------------------------------------------- environment
 
-function ExtrudedWalls({ grid }: { grid: FreeGrid }) {
+/** Walls from grid.png. `ghost`: faint, see-through version drawn under the scan to fill its holes. */
+function ExtrudedWalls({ grid, ghost = false }: { grid: FreeGrid; ghost?: boolean }) {
   const rects = useMemo(() => mergeWalls(grid), [grid])
   const ref = useRef<THREE.InstancedMesh>(null)
   useLayoutEffect(() => {
@@ -44,7 +58,11 @@ function ExtrudedWalls({ grid }: { grid: FreeGrid }) {
   return (
     <instancedMesh ref={ref} args={[undefined, undefined, rects.length]} castShadow={false}>
       <boxGeometry />
-      <meshStandardMaterial color="#b8ad99" roughness={0.9} />
+      {ghost ? (
+        <meshStandardMaterial color="#8f877a" roughness={1} transparent opacity={0.12} depthWrite={false} />
+      ) : (
+        <meshStandardMaterial color="#b8ad99" roughness={0.9} />
+      )}
     </instancedMesh>
   )
 }
@@ -82,16 +100,20 @@ function Environment() {
   const walls = grid ? <ExtrudedWalls grid={grid} /> : null
   return (
     <>
-      <mesh position={[w / 2, h / 2, -0.01]}>
+      {/* Neutral floor under everything: holes / unscanned parts of the scan read as floor, not black. */}
+      <mesh position={[w / 2, h / 2, -0.03]}>
         <planeGeometry args={[w, h]} />
-        <meshStandardMaterial color="#2a2c31" roughness={1} />
+        <meshStandardMaterial color="#4a4e57" roughness={1} />
       </mesh>
       {hello.transform ? (
-        <Fallback fallback={walls}>
-          <Suspense fallback={walls}>
-            <ScanModel url={`/maps/${m.name}/scan.glb`} transform={hello.transform} />
-          </Suspense>
-        </Fallback>
+        <>
+          {grid && <ExtrudedWalls grid={grid} ghost />}
+          <Fallback fallback={walls}>
+            <Suspense fallback={walls}>
+              <ScanModel url={`/maps/${m.name}/scan.glb`} transform={hello.transform} />
+            </Suspense>
+          </Fallback>
+        </>
       ) : (
         walls
       )}
@@ -105,12 +127,87 @@ function Environment() {
 
 // ---------------------------------------------------------------- live objects
 
-/** Drones: glowing spheres, positions smoothed between 10 Hz state updates. */
+// W's CC0 drone model lives in scene3d/dressing/ (see its README). Found by glob so the build
+// still works without it (the spheres are used then — cut ladder item 2).
+const DRESSING_GLBS = import.meta.glob('./dressing/*.glb', { eager: true, query: '?url', import: 'default' }) as Record<
+  string,
+  string
+>
+const DRONE_GLB_URL = Object.entries(DRESSING_GLBS).find(([path]) => /drone/i.test(path))?.[1]
+const DRONE_SCALE = 1.25 // model spans 0.5 m (true size); a bit larger reads better on the projector
+const PROPS: [string, number][] = [
+  ['prop_FL', 1],
+  ['prop_RR', 1],
+  ['prop_FR', -1],
+  ['prop_RL', -1],
+]
+
+/** One drone body: W's GLB (accent tinted with the drone colour) or the glowing sphere fallback. */
+function DroneBody({ id, colour, url }: { id: string; colour: string; url?: string }) {
+  return url ? (
+    <Suspense fallback={<SphereBody colour={colour} />}>
+      <GlbBody id={id} colour={colour} url={url} />
+    </Suspense>
+  ) : (
+    <SphereBody colour={colour} />
+  )
+}
+
+function SphereBody({ colour }: { colour: string }) {
+  return (
+    <>
+      <mesh>
+        <sphereGeometry args={[0.25, 24, 16]} />
+        <meshStandardMaterial color={colour} emissive={colour} emissiveIntensity={1.6} />
+      </mesh>
+      {/* heading nub along +x */}
+      <mesh position={[0.32, 0, 0]} rotation={[0, 0, -Math.PI / 2]}>
+        <coneGeometry args={[0.08, 0.18, 12]} />
+        <meshBasicMaterial color={colour} />
+      </mesh>
+    </>
+  )
+}
+
+/** Model axes (README): +Y up, +X forward -> one +90° X rotation inside the z-up SimFrame. */
+function GlbBody({ id, colour, url }: { id: string; colour: string; url: string }) {
+  const { scene } = useGLTF(url)
+  const model = useMemo(() => {
+    const m = SkeletonUtils.clone(scene) // one copy per drone
+    m.traverse((o) => {
+      const mesh = o as THREE.Mesh
+      if (!mesh.isMesh || !(mesh.material instanceof THREE.MeshStandardMaterial)) return
+      const mat = mesh.material.clone() // own materials, so LOST styling is per drone
+      if (mat.name === 'accent') {
+        mat.color.set(colour)
+        mat.emissive.set(colour)
+      }
+      mesh.material = mat
+    })
+    return m
+  }, [scene, colour])
+  useFrame((_, dt) => {
+    const alive = sim.snap.state?.drones.find((d) => d.id === id)?.alive ?? true
+    if (!alive) return // props stop when the drone is lost
+    for (const [name, dir] of PROPS) {
+      const p = model.getObjectByName(name)
+      if (p) p.rotation.y += dir * 60 * dt
+    }
+  })
+  return (
+    <group rotation={[Math.PI / 2, 0, 0]} scale={DRONE_SCALE}>
+      <primitive object={model} />
+    </group>
+  )
+}
+
+/** Drones: model (or glowing sphere) per drone, positions smoothed between 10 Hz state updates. */
 function Drones() {
   const hello = useSim((s) => s.hello)
   const ids = hello?.drones ?? NO_DRONES
   const refs = useRef<Record<string, THREE.Group | null>>({})
-  const mats = useRef<Record<string, THREE.MeshStandardMaterial | null>>({})
+  const lights = useRef<Record<string, THREE.PointLight | null>>({})
+  const tmp = useMemo(() => new THREE.Vector3(), [])
   useFrame((_, dt) => {
     const st = sim.snap.state
     if (!st) return
@@ -119,31 +216,26 @@ function Drones() {
       const g = refs.current[d.id]
       if (!g) continue
       const z = d.alive ? d.z : 0.25 // a lost drone has fallen
-      g.position.lerp(new THREE.Vector3(d.x, d.y, z), k)
+      g.position.lerp(tmp.set(d.x, d.y, z), k)
       g.rotation.z = d.yaw
-      const mat = mats.current[d.id]
-      if (mat) mat.emissiveIntensity = d.alive ? 1.6 : 0
+      // LOST: glow off, light off, tilted on the floor
+      g.rotation.x = d.alive ? 0 : 0.5
+      // LOST: every emissive part (sphere / model accent + nav lights) goes dark
+      const glow = d.alive ? (DRONE_GLB_URL ? 1.2 : 1.6) : 0
+      g.traverse((o) => {
+        const m = (o as THREE.Mesh).material
+        if (m instanceof THREE.MeshStandardMaterial) m.emissiveIntensity = glow
+      })
+      const l = lights.current[d.id]
+      if (l) l.intensity = d.alive ? 1.5 : 0
     }
   })
   return (
     <>
       {ids.map((d) => (
         <group key={d.id} ref={(g) => void (refs.current[d.id] = g)}>
-          <mesh>
-            <sphereGeometry args={[0.25, 24, 16]} />
-            <meshStandardMaterial
-              ref={(m) => void (mats.current[d.id] = m)}
-              color={d.colour}
-              emissive={d.colour}
-              emissiveIntensity={1.6}
-            />
-          </mesh>
-          {/* heading nub along +x */}
-          <mesh position={[0.32, 0, 0]} rotation={[0, 0, -Math.PI / 2]}>
-            <coneGeometry args={[0.08, 0.18, 12]} />
-            <meshBasicMaterial color={d.colour} />
-          </mesh>
-          <pointLight color={d.colour} intensity={1.5} distance={3} />
+          <DroneBody id={d.id} colour={d.colour} url={DRONE_GLB_URL} />
+          <pointLight ref={(l) => void (lights.current[d.id] = l)} color={d.colour} intensity={1.5} distance={3} />
         </group>
       ))}
     </>
@@ -328,7 +420,8 @@ function overviewPose(hello: HelloMsg, cam: THREE.PerspectiveCamera, aspect: num
 }
 
 /** Where an event happened: its xy, else the involved drone's current position. */
-function eventFocus(e: EventMsg): [number, number] | null {
+function eventFocus(e: SimEventMsg): [number, number] | null {
+  if (e.kind === 'false_alarm') return null // decoy beat dropped from the demo: don't cut to it
   if (e.xy) return e.xy
   const d = e.drone ? sim.snap.state?.drones.find((x) => x.id === e.drone) : undefined
   return d ? [d.x, d.y] : null
@@ -388,8 +481,14 @@ function CameraRig({ mode }: { mode: CamMode }) {
       // Chase: 2.5 m behind and 3 m above the drone (clear of the 2.6 m walls), looking ahead.
       const d = sim.snap.state?.drones.find((x) => x.id === mode)
       if (!d) return
-      toThree(d.x - 2.5 * Math.cos(d.yaw), d.y - 2.5 * Math.sin(d.yaw), d.z + 3, tmpPos)
-      toThree(d.x + 2.5 * Math.cos(d.yaw), d.y + 2.5 * Math.sin(d.yaw), 0, tmpTarget)
+      if (d.alive) {
+        toThree(d.x - 2.5 * Math.cos(d.yaw), d.y - 2.5 * Math.sin(d.yaw), d.z + 3, tmpPos)
+        toThree(d.x + 2.5 * Math.cos(d.yaw), d.y + 2.5 * Math.sin(d.yaw), 0, tmpTarget)
+      } else {
+        // a lost drone lies on the floor: look down at it from above instead
+        toThree(d.x, d.y - 1.5, 6, tmpPos)
+        toThree(d.x, d.y, 0, tmpTarget)
+      }
     }
     camera.position.lerp(tmpPos, k)
     if (ctl) {
@@ -409,7 +508,9 @@ export function Scene3D() {
   const hasScan = useSim((s) => !!s.hello?.transform)
   return (
     <div className="scene3d">
-      <Canvas camera={{ fov: 50, near: 0.1, far: 500, position: [15, 25, 10] }} dpr={[1, 2]}>
+      {/* frameloop="demand" + FrameCap: ~30 fps max, so the 3D view leaves GPU time for Gemma. */}
+      <Canvas camera={{ fov: 50, near: 0.1, far: 500, position: [15, 25, 10] }} dpr={[1, 1.5]} frameloop="demand">
+        <FrameCap fps={MAX_FPS} />
         <color attach="background" args={['#0e1014']} />
         <hemisphereLight args={['#c8d2e0', '#202020', 0.9]} />
         <directionalLight position={[10, 30, 10]} intensity={0.8} />

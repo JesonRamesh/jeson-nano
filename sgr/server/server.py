@@ -129,6 +129,10 @@ class Hub:
                     self.store_frame(item)
                     self._broadcast(item.data)
                 elif isinstance(item, JsonOut):
+                    # The loop re-sends hello after a snapshot load; browsers that connect
+                    # later must get that one, not the hello from server start.
+                    if item.text.startswith('{"type":"hello"'):
+                        self.hello_text = item.text
                     self._broadcast(item.text)
             # Always yield so WS senders run even under a steady stream.
             await asyncio.sleep(0 if items else 0.005)

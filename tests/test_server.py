@@ -97,3 +97,15 @@ def test_map_files_and_scenario_rest(setup, map_dir: Path) -> None:
     assert client.put("/api/maps/test/scenario", json=sc).status_code == 200
     assert Scenario.load(map_dir).flare.t == 42.0
     assert client.put("/api/maps/test/scenario", json={"name": "broken"}).status_code == 422
+
+
+def test_rehello_after_snapshot_load_is_replayed_to_new_clients(setup, map_dir: Path) -> None:
+    """The loop re-publishes hello after a snapshot load; later browsers must get that one."""
+    client, bus, hub, scenario = setup
+    hello2 = build_hello(map_dir, scenario).model_copy(update={"entrance": scenario.entrance.model_copy(update={"x": 9.5})})
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_text()  # original hello
+        bus.publish(hello2)
+        assert parse_server_message(ws.receive_text()).entrance.x == 9.5
+    with client.websocket_connect("/ws") as ws:
+        assert parse_server_message(ws.receive_text()).entrance.x == 9.5

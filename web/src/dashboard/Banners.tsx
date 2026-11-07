@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { EventMsg } from '../contracts'
-import { useSim, type SimEvent } from '../state/store'
+import { useSim, type SimEvent, type SimEventMsg } from '../state/store'
 
 const SHOW_MS = 4500
 const MAX_SHOWN = 2
@@ -8,7 +7,7 @@ const MAX_SHOWN = 2
 type Tone = 'danger' | 'warn' | 'good'
 
 /** Banner text for each event kind (spec §10.1 "Banners for key events"). */
-function bannerFor(e: EventMsg): { text: string; tone: Tone } {
+function bannerFor(e: SimEventMsg): { text: string; tone: Tone } {
   const who = e.drone ? ` — ${e.drone}` : ''
   switch (e.kind) {
     case 'fire_confirmed':
@@ -29,6 +28,8 @@ function bannerFor(e: EventMsg): { text: string; tone: Tone } {
       return { text: 'NO SAFE ROUTE — HOLDING', tone: 'danger' }
     case 'mission_complete':
       return { text: 'MISSION COMPLETE', tone: 'good' }
+    case 'survivor_check':
+      return { text: `POSSIBLE SURVIVOR — ${e.drone ?? 'DRONE'} TAKING A CLOSER LOOK`, tone: 'warn' }
   }
 }
 
