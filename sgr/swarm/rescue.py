@@ -4,13 +4,15 @@
   below the 70 °C retreat limit), at a spot away from the route-graph corridors so it never blocks them.
 - Route: A* entrance -> survivor once the survivor is confirmed. Re-planned (REPLAN) when a new
   blocked/fire cell lands within 0.5 m of it; the old route stays in old_routes for 6 s.
-  No route -> status `none`, NO_ROUTE, the chain holds and the route is re-checked every 2 s.
+  No route -> status `none`, NO_ROUTE, the chain holds and the route is re-checked every 2 s; one drone
+  (a sentinel, never the lead or the survivor drone) flies to ~2.5 m from the blockage so its LiDAR can
+  see whether it is still there (after a judge's Undo, nothing else would ever clear it).
 - Chain: route -> RDP -> turn points (> 35°). D_survivor hovers over the survivor, D_lead goes to the
   entrance to meet the firefighter, any other drone takes the largest turns as a sentinel (yaw sweep).
   Rebuilt when the route changes or a drone is lost.
-- Act 1, once the chain is ready (act2_start already saved with everyone at their posts): the lead
-  patrols the first half of the route and the sentinel the second half (LiDAR sweeping as they go), so a
-  judge's debris click anywhere on the route gets noticed. In Act 2 they hold their posts again (P's
+- Act 1, once the chain is ready (act2_start already saved with everyone at their posts): the chain
+  drones split the route and patrol it (lead first, sentinel middle, survivor drone the last stretch),
+  LiDAR sweeping as they go, so a judge's debris click anywhere on the route gets noticed. In Act 2 they hold their posts again (P's
   handover logic expects fixed checkpoints, and the lead meets the firefighter at the entrance).
 - Act 2 (the firefighter's tracked position `ff` is known): re-plans start at the firefighter, only
   blockages AHEAD of them on the route count, the lead is the drone nearest the firefighter and
@@ -45,6 +47,7 @@ CHAIN_READY_M = 0.8  # a chain drone this close to its post is in position
 CHAIN_READY_MAX_S = 40.0  # ... or call the chain ready this long after it formed anyway
 PATROL_END_M = 4.0  # patrol stops this far from the lead / survivor drone (they watch their own ends)
 PATROL_STEP_M = 1.0  # patrol waypoint spacing along the route
+PATROL_MAX_HEAT = 0.3  # skip waypoints where the belief already holds this much heat (retreat ping-pong)
 CHAIN_MAX = 3  # survivor + lead + one sentinel (the three checkpoints); extra drones keep exploring
 _RING = np.radians(np.arange(0, 360, 10))
 
@@ -69,6 +72,9 @@ class Rescue:
     _chain_t: float | None = None  # when the chain formed
     _last_replan: float = -1e9  # sim time of the last REPLAN / NO_ROUTE
     _ready: bool = False  # chain_ready reached (latched: the patrol takes the sentinel off its post)
+    _blockage: Pt | None = None  # where the last NO_ROUTE came from (re-check target)
+    _checker: str | None = None  # the drone sent to re-check it
+    _patrol_key: tuple | None = None  # patrol stretches are recomputed only when route / map / drones change
     ff: Pt | None = None  # Act 2: the firefighter's tracked position (None in Act 1)
 
     # ------------------------------------------------------------------ inputs
@@ -104,37 +110,92 @@ class Rescue:
 
     def _phase(self, t: float, agents: dict[str, Agent], alive: dict[str, Pose]) -> str:
         if self.bb.route.status == "none":
+            self._recheck(t, agents, alive)
             return "no_route"
+        self._checker = None
         if not self.roles:
             return "explore"
         if not self._ready and self._chain_ready(t, agents, alive):
             self._ready = True
-        self._patrols(agents)
+        self._patrols(agents, alive)
         return "chain_ready" if self._ready else "chain"
 
-    def _patrols(self, agents: dict[str, Agent]) -> None:
-        """Act 1 + chain ready: the lead and the sentinels split the route and sweep it; Act 2: posts."""
-        walkers = [d for d, r in sorted(self.roles.items(), key=lambda kv: kv[1] != "lead") if r != "survivor"]
+    def _recheck(self, t: float, agents: dict[str, Agent], alive: dict[str, Pose]) -> None:
+        """NO_ROUTE: send one drone to look at the blockage again, so a cleared one gets noticed."""
+        if self._blockage is None or (self._checker is not None and self._checker in alive):
+            return
+        lead = self.bb.lead
+        cands = [d for d, r in self.roles.items() if r == "sentinel" and d in alive]
+        cands = cands or [d for d, r in self.roles.items() if r != "survivor" and d != lead and d in alive]
+        if not cands:
+            return
+        bx, by = self._blockage
+        d = min(cands, key=lambda d: math.hypot(alive[d].x - bx, alive[d].y - by))
+        post = self._view_post(self._blockage, alive[d])
+        if post is None:
+            return
+        self._checker = d
+        agents[d].patrol(None)
+        agents[d].station(post, face=self._blockage, mode="CHAIN", task="re-checking the blockage")
+        self.trace.log(t, d, "INSPECT", f"{d} re-checking the blockage near ({bx:.1f}, {by:.1f}) from "
+                                        f"({post[0]:.1f}, {post[1]:.1f})",
+                       Evidence(sensor="planner", value={"blockage": [round(bx, 2), round(by, 2)],
+                                                         "post": [round(post[0], 2), round(post[1], 2)]}))
+
+    def _view_post(self, target: Pt, pose: Pose) -> Pt | None:
+        """Reachable spot ~2.5 m from `target` with line of sight to it, cheapest for the drone."""
+        cm = cost_map(self.belief)
+        df = DistanceField(self.belief, (pose.x, pose.y))
+        best, bc = None, math.inf
+        for r in (2.5, 3.0, 2.0, 3.5):
+            for a in _RING:
+                px, py = target[0] + r * math.cos(a), target[1] + r * math.sin(a)
+                i, j = self.belief.world_to_cell(px, py)
+                if not (self.belief.inside(i, j) and cm.traversable[j, i] and np.isfinite(df.cost[j, i])):
+                    continue
+                if self._los((px, py), target) and df.cost[j, i] < bc:
+                    best, bc = (px, py), df.cost[j, i]
+            if best is not None:
+                return best
+        return None
+
+    def _patrols(self, agents: dict[str, Agent], alive: dict[str, Pose]) -> None:
+        """Act 1 + chain ready: the chain drones split the route (lead first, sentinels in the middle,
+        the survivor drone the last stretch up to the survivor) and sweep it; Act 2: back to posts."""
+        order = {"lead": 0, "sentinel": 1, "survivor": 2}
+        walkers = sorted((d for d in self.roles if d in alive), key=lambda d: (order[self.roles[d]], d))
         active = self._ready and self.ff is None and self.path and self.bb.route.status == "ok"
         if not active or not walkers:
-            for d in walkers:
+            for d in self.roles:
                 agents[d].patrol(None)
+            self._patrol_key = None
             return
+        key = (self.bb.route.version, self.belief.version, tuple(walkers))
+        if key == self._patrol_key:
+            return
+        self._patrol_key = key
         pts = rdp(self.path, 0.1)
         total = path_length(pts)
-        span = (total - 2 * PATROL_END_M) / len(walkers)
-        for k, d in enumerate(walkers):  # lead first (nearest the entrance), sentinels further along
+        span = (total - PATROL_END_M) / len(walkers)  # the survivor drone's stretch ends at the survivor
+        for k, d in enumerate(walkers):
             a = PATROL_END_M + k * span
-            agents[d].patrol(self._patrol_points(pts, a - (1.0 if k else 0.0), a + span))
+            agents[d].patrol(self._patrol_points(pts, a - (1.0 if k else 0.0), a + span, alive[d]))
 
-    @staticmethod
-    def _patrol_points(pts: list[Pt], s0: float, s1: float) -> list[Pt]:
-        """Waypoints every PATROL_STEP_M along the route between arc lengths s0 and s1."""
+    def _patrol_points(self, pts: list[Pt], s0: float, s1: float, pose: Pose) -> list[Pt]:
+        """Waypoints every PATROL_STEP_M along the route between arc lengths s0 and s1 that this drone can
+        actually reach: not in a wall's inflation or a fire's >70 °C core, not where heat was already
+        measured, and reachable from where it is (a fire across a one-way building cuts the route)."""
+        cm = cost_map(self.belief)  # drone mode
+        df = DistanceField(self.belief, (pose.x, pose.y))
         out, s = [], max(0.0, s0)
         while s <= s1:
-            out.append(_point_at(pts, s))
+            x, y = _point_at(pts, s)
+            i, j = self.belief.world_to_cell(x, y)
+            if (self.belief.inside(i, j) and cm.traversable[j, i] and self.belief.heat[j, i] < PATROL_MAX_HEAT
+                    and np.isfinite(df.cost[j, i])):
+                out.append((round(x, 2), round(y, 2)))
             s += PATROL_STEP_M
-        return [(round(x, 2), round(y, 2)) for x, y in out]
+        return out
 
     def _chain_ready(self, t: float, agents: dict[str, Agent], alive: dict[str, Pose]) -> bool:
         """Every chain drone at its post (Act 2 starts here: the lead is at the entrance)."""
@@ -160,6 +221,7 @@ class Rescue:
                 self.path = None
                 why = self._why()
                 self._last_replan = t
+                self._blockage = self._pending[3] if self._pending else self._blockage
                 self.trace.log(t, "swarm", "NO_ROUTE", f"No safe route to the survivor{why}. Holding.",
                                self._evidence(fallback={"from": [round(start[0], 2), round(start[1], 2)],
                                                         "to": list(target)}))
@@ -237,7 +299,8 @@ class Rescue:
         plan: list[tuple[str, str, Pt, dict]] = [(surv, "survivor", target, {"task": "over the survivor"})]
         if free:
             meet = self.ff if self.ff is not None else self.entrance  # Act 2: lead with the firefighter
-            lead = min(free, key=near(meet))
+            keep = self.bb.lead if self.ff is not None and self.bb.lead in free else None  # Guidance steers it
+            lead = keep or min(free, key=near(meet))
             free.remove(lead)
             face = self.path[min(5, len(self.path) - 1)]
             task = "lead: guiding the firefighter" if self.ff is not None else "lead: meet the firefighter"
