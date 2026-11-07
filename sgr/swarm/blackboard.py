@@ -43,6 +43,8 @@ class Blackboard:
     checkpoints: list[Checkpoint] = field(default_factory=list)
     survivor: SurvivorState = field(default_factory=lambda: SurvivorState(status="unknown"))
     events: list[EventMsg] = field(default_factory=list)
+    chain_formed: bool = False
+    lead: str | None = None
     _hz_next: int = 1
 
     # ---------------------------------------------------------------- publishing

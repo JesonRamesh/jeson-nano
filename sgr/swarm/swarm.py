@@ -18,6 +18,7 @@ import numpy as np
 from sgr.contracts import (
     Detection,
     Evidence,
+    OldRoute,
     PriorMap,
     Readings,
     SwarmDrone,
@@ -32,7 +33,8 @@ from .belief import BeliefGrid
 from .blackboard import Blackboard
 from .coverage import camera_footprint
 from .hazards import Hazards
-from .planner import DistanceField, path_hits, snap, cost_map
+from .rescue import Rescue
+from .planner import DistanceField, cost_map, path_hits, path_length, snap
 from .trace import Trace
 
 SAME_BLOCKAGE_M = 2.5  # new blocked cells this close to a reported blockage extend it (one trace row each)
@@ -47,9 +49,12 @@ class Swarm:
         self.bb = Blackboard()
         self.trace = Trace()
         self.hazards = Hazards(self.belief, self.bb, self.trace)
+        self.rescue = Rescue(self.belief, self.bb, self.trace, scenario_prior.graph,
+                             (scenario_prior.entrance.x, scenario_prior.entrance.y))
         self.agents = {d: Agent(d, scenario_prior.altitude) for d in self.drones}
         self._excluded: dict[str, set[str]] = {d: set() for d in self.drones}
         self._excluded_version = self.belief.version
+        self._path_replans: set[str] = set()  # blockages already reported as a REPLAN
         self.t = 0.0
 
     # ------------------------------------------------------------------ facade
@@ -70,6 +75,10 @@ class Swarm:
             self.bb.upsert_detection(det)
             self.hazards.on_detection(t, det, self.agents, poses)
         relooks = self.hazards.tick(t, self.agents, poses)
+        for sensor, d, cells in self.hazards.fresh_fire:
+            self.rescue.on_new_cells(sensor, d, cells)
+        self.hazards.fresh_fire.clear()
+        phase = self.rescue.tick(t, self.agents, poses)
         self._assign(t, alive)
 
         cmds: dict[str, VelCmd] = {}
@@ -85,7 +94,7 @@ class Swarm:
 
         state = SwarmState(
             t=t,
-            phase="explore",
+            phase=phase,
             drones=[
                 SwarmDrone(id=d, status=self.agents[d].mode, task=self.agents[d].task, alive=d not in self.bb.lost)
                 for d in self.drones
@@ -94,6 +103,8 @@ class Swarm:
             old_routes=[o for o in self.bb.old_routes if o.until > t],
             checkpoints=self.bb.checkpoints,
             survivor=self.bb.survivor,
+            chain_formed=self.bb.chain_formed,
+            lead=self.bb.lead,
             map_delta=self.belief.pop_map_delta(),
             searched_delta=self.belief.pop_searched_delta(),
             events=self.bb.pop_events(),
@@ -143,9 +154,13 @@ class Swarm:
                                             scan=[round(x, 2) for x in r.lidar]))
                     self.bb.add_hazard("blocked", (cx, cy), "lidar", t)
                     self.bb.event("blocked", drone=d, xy=(cx, cy))
+            if blocked:
+                self.rescue.on_new_cells("lidar", d, blocked)
             if blocked or cleared:
                 for ag in self.agents.values():
                     if ag.path and path_hits(ag.path, blocked + cleared, self.belief):
+                        if blocked and ag.id not in self.bb.lost:
+                            self._path_replan(t, d, ag, blocked)
                         ag.invalidate()
             self.belief.mark_searched(camera_footprint(self.belief, r.pose) & free)
         if self.belief.version != self._excluded_version:  # the map changed: give up-areas another chance
@@ -155,8 +170,30 @@ class Swarm:
             for ag in self.agents.values():
                 ag.forget_given_up()
 
+    def _path_replan(self, t: float, seen_by: str, ag: Agent, blocked: list[tuple[int, int]]) -> None:
+        """A drone's planned path just got blocked by debris: REPLAN (once per blockage)."""
+        xs = [self.belief.cell_center(i, j) for i, j in blocked]
+        cx, cy = float(np.mean([p[0] for p in xs])), float(np.mean([p[1] for p in xs]))
+        hz = min((h for h in self.bb.hazards.values() if h.kind == "blocked"),
+                 key=lambda h: math.hypot(h.xy[0] - cx, h.xy[1] - cy), default=None)
+        key = hz.id if hz else f"{cx:.0f},{cy:.0f}"  # one row per blockage; other drones re-route quietly
+        if key in self._path_replans:
+            return
+        self._path_replans.add(key)
+        where = f"to area {ag.area}" if ag.area else ""
+        row = self.trace.log(
+            t, ag.id, "REPLAN",
+            f"{ag.id} path {where} blocked by debris near ({cx:.1f}, {cy:.1f}) ({seen_by} LiDAR): re-routing",
+            Evidence(sensor="lidar", value={"seen_by": seen_by, "cells": [list(c) for c in blocked[:20]],
+                                            "old_path_m": round(path_length(ag.path), 1)}),
+        )
+        if row is not None:
+            self.bb.old_routes.append(OldRoute(points=[(round(x, 2), round(y, 2)) for x, y in ag.path],
+                                               until=t + 6.0))
+            self.bb.event("replan", drone=ag.id, xy=(cx, cy))
+
     def _assign(self, t: float, alive: dict[str, Readings]) -> None:
-        idle = [d for d in alive if self.agents[d].area is None]
+        idle = [d for d in alive if self.agents[d].area is None and not self.agents[d].stationed]
         if not idle:
             return
         cm = cost_map(self.belief)
