@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.12,<3.13"
-# dependencies = ["mujoco==3.17.0", "numpy", "pillow", "httpx"]
-# ///
 """Gemma hour-1 bench (spec §7.3).
 
 Renders the three §7.1 targets (fire, survivor, decoy) in a tiny MuJoCo scene,
@@ -39,22 +35,8 @@ import mujoco  # noqa: E402
 from PIL import Image  # noqa: E402
 
 from sgr.world import shapes  # noqa: E402
+from sgr.perception.gemma import PROMPT, SCHEMA  # noqa: E402  (one prompt, shared with the live client)
 
-PROMPT = (
-    "You are the vision system of a search-and-rescue drone in a burning building. "
-    "Look at the image. Answer only JSON: "
-    '{"fire": bool, "person": bool, "confidence": 0..1, "caption": "≤12 words"}.'
-)
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "fire": {"type": "boolean"},
-        "person": {"type": "boolean"},
-        "confidence": {"type": "number"},
-        "caption": {"type": "string"},
-    },
-    "required": ["fire", "person", "confidence", "caption"],
-}
 # what a correct answer looks like for each target
 EXPECTED = {
     "fire": {"fire": True, "person": False},
