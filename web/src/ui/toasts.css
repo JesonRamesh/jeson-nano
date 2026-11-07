@@ -1,6 +1,6 @@
 .toasts {
   position: fixed;
-  bottom: 330px; /* above the trace, clear of event banners */
+  bottom: 160px; /* above the trace, clear of event banners */
   left: 50%;
   transform: translateX(-50%);
   display: flex;

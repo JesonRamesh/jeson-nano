@@ -8,9 +8,10 @@
 
 .topbar {
   display: flex;
-  gap: 24px;
+  gap: 18px;
   align-items: center;
-  padding: 8px 16px;
+  padding: 4px 14px;
+  font-size: 14px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
@@ -37,11 +38,11 @@ h2 {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 1fr 1fr 360px;
-  grid-template-rows: 1fr 300px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  grid-template-rows: minmax(0, 1fr) auto;
   grid-template-areas:
-    'map drones drones'
-    'trace trace budget';
+    'map drones'
+    'trace trace';
   gap: 10px;
   padding: 10px;
 }
@@ -56,10 +57,8 @@ h2 {
   min-height: 0;
 }
 .trace-panel { grid-area: trace; }
-.budget-panel { grid-area: budget; }
 
 .trace-panel,
-.budget-panel,
 .map-area,
 .drone-panel {
   background: var(--panel);
@@ -193,7 +192,21 @@ h2 {
 .chip-bad { background: #4d1a1b; color: var(--bad); }
 
 /* ---- trace ---- */
-.trace-panel { display: flex; flex-direction: column; padding: 8px 10px; min-height: 0; }
+.trace-panel { display: flex; flex-direction: column; padding: 6px 10px; min-height: 0; }
+.trace-panel.expanded ul { max-height: 40vh; }
+.trace-panel.collapsed ul { overflow-y: hidden; }
+.trace-head { display: flex; align-items: center; gap: 16px; }
+.trace-head h2 { margin: 0 0 2px; }
+.trace-toggle {
+  font: inherit;
+  font-size: 14px;
+  padding: 1px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: #262b35;
+  color: var(--text);
+  cursor: pointer;
+}
 .trace-panel ul {
   flex: 1;
   min-height: 0;
@@ -215,11 +228,6 @@ h2 {
 .action-MARK_BLOCKED, .action-DRONE_LOST, .action-NO_ROUTE, .action-RETREAT { background: #4d1a1b; color: var(--bad); }
 .action-REPLAN, .action-SURVIVOR_CONFIRMED, .action-MISSION_COMPLETE { background: #1e4d33; color: var(--ok); }
 
-/* ---- budget ---- */
-.budget-panel { padding: 8px 12px; font-size: 16px; overflow: hidden; }
-.budget-panel dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; }
-.budget-panel dt { color: var(--muted); }
-.budget-panel dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- click tool ---- */
 .map-toolbar { align-items: center; z-index: 2; }
@@ -280,14 +288,11 @@ h2 {
   text-shadow: 0 0 3px #000;
 }
 
-/* ---- budget: stale indicator ---- */
-.budget-panel.stale dd { color: var(--muted) !important; }
-.budget-stale { color: var(--warn); font-size: 14px; margin-left: 8px; }
 
 /* ---- event banners ---- */
 .banners {
   position: fixed;
-  top: 52px;
+  top: 36px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
