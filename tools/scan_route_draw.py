@@ -12,11 +12,11 @@ Needs topdown.jpg (tools/scan_topdown.py) and grid.png/scenario.json (tools/scan
 Needs the GUI build of OpenCV (`opencv-python`, not -headless): `uv run` on this file gets it.
 
 MODES (press the key)                    MOUSE
-  r  route      click = add node + edge   left click / drag    act (drag a node to move it)
-                from the last node; click  right click          end the current chain
-                a node to connect/continue right drag           pan
-                from it; click an edge to  wheel / + -          zoom
-                branch off it               arrows              pan
+  r  route      click = add node + edge   click / drag         act (drag a node to move it)
+                from the last node; click  e / Esc / right-click end the current chain
+                a node to connect/continue   (Mac: two-finger click or ctrl+click)
+                from it; click an edge to  two-finger scroll    pan  (arrows / right-drag too)
+                branch off it              + - / ctrl+scroll    zoom
   c  checkpoint click a node to toggle it  KEYS
                 as a drone checkpoint;      1..5  set kind of node under cursor:
                 d over one = cycle drone          1 entrance 2 junction 3 door 4 room 5 stairs
@@ -367,10 +367,18 @@ class App:
         self.mouse = (sx, sy)
         wx, wy = V.s2w(sx, sy)
         rad = self.PICK_PX / V.zoom * V.res
-        if ev == cv2.EVENT_MOUSEWHEEL:
-            V.zoom_at(sx, sy, 1.2 if cv2.getMouseWheelDelta(flags) > 0 else 1 / 1.2)
+        if ev in (cv2.EVENT_MOUSEWHEEL, cv2.EVENT_MOUSEHWHEEL):
+            d = cv2.getMouseWheelDelta(flags)
+            if flags & cv2.EVENT_FLAG_CTRLKEY:          # ctrl + scroll = zoom
+                V.zoom_at(sx, sy, 1.1 if d > 0 else 1 / 1.1)
+            elif ev == cv2.EVENT_MOUSEWHEEL:              # two-finger scroll = pan
+                V.pan(0, 25 * np.sign(d))
+            else:
+                V.pan(-25 * np.sign(d), 0)
         elif ev in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_RBUTTONDOWN):
             btn = "L" if ev == cv2.EVENT_LBUTTONDOWN else "R"
+            if btn == "L" and flags & cv2.EVENT_FLAG_CTRLKEY:   # macOS ctrl+click = right click
+                btn = "R"
             self.press = [btn, sx, sy, R.node_at(wx, wy, rad) if btn == "L" else None, False]
         elif ev == cv2.EVENT_MOUSEMOVE and self.press:
             btn, px, py, node, dragging = self.press
@@ -446,8 +454,8 @@ class App:
                   2555904: (-60, 0), 65363: (-60, 0)}
         if k in arrows:
             V.pan(*arrows[k]); return True
-        if k == 27 and self.head:
-            self.head = None; return True
+        if (k == 27 or ch == "e") and self.head:
+            self.head = None; self.msg = "chain ended"; return True
         if ch in ("q",) or k == 27:
             if R.dirty and not self.quit_armed:
                 self.quit_armed = True
@@ -528,11 +536,11 @@ class App:
             self.text(img, self.msg, (10, V.H - 12), 0.55)
         if self.show_help:
             lines = ["r route: click = node+edge from last, click node = connect, click edge = branch",
-                     "   right click = end chain, drag node = move",
+                     "   end chain: e / Esc / right-click (two-finger or ctrl+click); drag node = move",
                      "c checkpoint: click node/edge = toggle checkpoint, d over it = cycle drone",
                      "b blocked: click edge = mark blocked door/debris (again = clear)",
                      "x delete node/edge     1-5 over node: entrance/junction/door/room/stairs",
-                     "u undo   a grid overlay   f fit   wheel/+/- zoom   right-drag/arrows pan",
+                     "u undo  a grid overlay  f fit  +/- or ctrl+scroll zoom  two-finger scroll/arrows pan",
                      "s save   q quit"]
             y0 = 40
             cv2.rectangle(img, (6, y0 - 4), (620, y0 + 20 * len(lines)), DARK, -1)
