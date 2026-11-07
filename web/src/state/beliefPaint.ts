@@ -4,7 +4,8 @@ import type { BeliefGrid } from './store'
 export const BELIEF_LEGEND: { label: string; colour: string }[] = [
   { label: 'searched', colour: '#4fc3f7' },
   { label: 'blocked', colour: '#ff4d4f' },
-  { label: 'fire / danger', colour: '#ff8a1f' },
+  { label: 'fire', colour: '#ff8a1f' },
+  { label: 'danger > 50 °C', colour: '#ffb020' },
   { label: 'unsafe', colour: '#ce93d8' },
 ]
 
