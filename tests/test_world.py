@@ -52,6 +52,18 @@ def test_boxes_cover_walls_exactly(seed):
     assert (cover == wall.astype(int)).all()  # every wall cell exactly once, no free cell
 
 
+def test_nearest_wall_steps_whole_cells():
+    """Regression: stepping x + k*0.1 in floats skipped the 8.9-9.0 cell and buried the decoy in the wall."""
+    from sgr.world.walls import nearest_wall_normal
+
+    free = np.zeros((40, 120), bool)
+    free[:, 71:89] = True  # corridor x in [7.1, 8.9]
+    d, fx, fy, nyaw = nearest_wall_normal(free, 8.7, 2.0, 0.1)
+    assert fx == pytest.approx(8.9) and d == pytest.approx(0.2) and nyaw == pytest.approx(math.pi)
+    d, fx, fy, nyaw = nearest_wall_normal(free, 7.3, 2.0, 0.1)
+    assert fx == pytest.approx(7.1) and nyaw == pytest.approx(0.0)
+
+
 def test_map_walls_merge_small(world):
     assert world.build_info.n_wall_boxes < 100
     cover = np.zeros(world.free.shape, int)
