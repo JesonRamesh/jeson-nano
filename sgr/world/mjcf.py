@@ -154,7 +154,7 @@ def build_mjcf(free: np.ndarray, res: float, origin, scenario, drone_ids: list[s
     for i in range(N_DEBRIS):
         pools.append(
             f'<body name="debris{i:02d}" mocap="true" pos="0 0 {PARK_Z}">'
-            f'{shapes.debris_geom(f"debris{i:02d}_g")}</body>'
+            f'{shapes.debris_geom(f"debris{i:02d}_g", variant=i + 1)}</body>'
         )
     for i in range(N_FIRE):
         pools.append(shapes.fire_cluster(f"fire{i:02d}", 0.0, 0.0, PARK_Z, mocap=True))

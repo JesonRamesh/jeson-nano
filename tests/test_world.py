@@ -277,3 +277,56 @@ def _try(f, *a):
     except Exception as e:
         return e
     return None
+
+
+# ------------------------------------------------------------------ W's assets in the cameras
+def test_rubble_rng_matches_web_hazards():
+    """rubble.rng is W's mulberry32 (web/src/scene3d/dressing/hazards.ts), so piles match the 3D view."""
+    from sgr.world.rubble import rng
+
+    r = rng(1)
+    assert r() == pytest.approx(0.627073940, abs=1e-8)
+
+
+def test_debris_is_rubble_on_an_invisible_block(world):
+    """Physics/LiDAR keep the 2 m block (group 4, never drawn); the cameras see W's rubble pile (group 1)."""
+    from sgr.world import shapes
+
+    m = world.model
+    b = m.body("debris00").id
+    geoms = [g for g in range(m.ngeom) if m.geom_bodyid[g] == b]
+    block = [g for g in geoms if m.geom_group[g] == shapes.DEBRIS_COLLISION_GROUP]
+    rubble = [g for g in geoms if m.geom_group[g] == 1]
+    assert len(block) == 1 and m.geom_contype[block[0]] == 1
+    assert np.allclose(m.geom_size[block[0]] * 2, shapes.DEBRIS_SIZE)
+    assert rubble and all(m.geom_contype[g] == 0 and m.geom_conaffinity[g] == 0 for g in rubble)
+
+
+def test_fire_particles_animate_and_stay_visual(world):
+    """W-style flame particles move each step; no fire geom collides or blocks LiDAR."""
+    fire = [g for g in range(world.model.ngeom) if world.model.geom(g).name.startswith("fire00_")]
+    assert all(world.model.geom_contype[g] == 0 and world.model.geom_group[g] == 1 for g in fire)
+    p = world._fire_fx[0]["p"]
+    before = world.model.geom_pos[p].copy()
+    world.step(20)
+    assert not np.allclose(before, world.model.geom_pos[p])
+
+
+def test_drone_model_is_visual_only(map_dir, monkeypatch):
+    """The shared drone.glb is drawn in the cameras, but drone physics (mass, inertia) is unchanged."""
+    from sgr.world import shapes
+
+    if not shapes.drone_model_parts():
+        pytest.skip("drone.glb not available in this checkout")
+    with_model = World(map_dir, Scenario.load(map_dir), scan_vis=False)
+    b = with_model.model.body("D1").id
+    model_geoms = [g for g in range(with_model.model.ngeom)
+                   if with_model.model.geom_bodyid[g] == b and with_model.model.geom(g).name.startswith("D1_m_")]
+    assert len(model_geoms) == len(shapes.drone_model_parts())
+    assert all(with_model.model.geom_group[g] == 2 and with_model.model.geom_contype[g] == 0 for g in model_geoms)
+
+    monkeypatch.setattr(shapes, "drone_model_parts", lambda: ())  # the primitive quadcopter only
+    plain = World(map_dir, Scenario.load(map_dir), scan_vis=False)
+    pb = plain.model.body("D1").id
+    assert with_model.model.body_mass[b] == pytest.approx(plain.model.body_mass[pb])
+    assert np.allclose(with_model.model.body_inertia[b], plain.model.body_inertia[pb])

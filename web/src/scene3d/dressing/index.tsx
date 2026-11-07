@@ -19,7 +19,6 @@ import { Atmosphere } from './atmosphere'
 import { FireFX } from './fire'
 import { beliefFires, mergeFires, RubbleTracker, useScenarioHazards, type DebrisBlock } from './hazards'
 import { RubblePile } from './rubble'
-import { SimDebrisBlock } from '../SimShapes'
 import { SmokeField } from './smokefield'
 
 export { FireFX } from './fire'
@@ -93,10 +92,7 @@ export function Dressing({ mapName, size, nodes, gridUrl, reveal = 'belief' }: D
         <FireFX key={`f${i}-${f.x.toFixed(1)}-${f.y.toFixed(1)}`} x={f.x} y={f.y} size={f.size} smoke={!lite} />
       ))}
       {(reveal === 'world' ? (hazards?.piles.flat() ?? []) : found).map((b) => (
-        <group key={`p${b.seed}`}>
-          <SimDebrisBlock x={b.x} y={b.y} yaw={b.yaw} />
-          <RubblePile x={b.x} y={b.y} yaw={b.yaw} seed={b.seed} dust={!lite} />
-        </group>
+        <RubblePile key={`p${b.seed}`} x={b.x} y={b.y} yaw={b.yaw} seed={b.seed} dust={!lite} />
       ))}
       {clicks
         .filter((c) => c.kind === 'debris')

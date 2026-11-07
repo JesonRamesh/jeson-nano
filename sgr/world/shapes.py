@@ -153,8 +153,10 @@ def assets() -> str:
     """<asset> children needed by the snippets below."""
     out = [f'<mesh name="{n}" vertex="{_cone_vertices(r, h)}"/>' for n, r, h in _CONES]
     out.append(f'<material name="mat_fire" emission="{FIRE_EMISSION}" specular="0" shininess="0"/>')
+    out.append('<material name="mat_fire_hot" emission="1" specular="0" shininess="0"/>')  # flame particles
     out.append('<material name="mat_matte" specular="0" shininess="0" reflectance="0"/>')
     out.extend(_drone_mesh_assets())
+    out.extend(_rubble_mesh_assets())
     out.append(f'<material name="mat_decoy" emission="{DECOY_EMISSION}" specular="0" shininess="0" reflectance="0"/>')
     return "\n".join(out)
 
@@ -170,8 +172,8 @@ def visual_settings() -> str:
     )
 
 
-# Flame look: tapered flame tongues (white-yellow core -> orange -> red tips), a glowing ember bed and a
-# dark smoke plume. Against the photoreal scan replica gemma4:e4b read the cartoon cones as "safety
+# Flame look: tapered flame tongues (white-yellow core -> orange -> red tips) on a glowing ember bed.
+# Against the photoreal scan replica gemma4:e4b read the cartoon cones as "safety
 # cones" / "yellow markers" (6/24 views called fire), so the fire has to look like fire.
 # (x, y, z_centre, rx, ry, rz, colour) per tongue, in the cluster frame (metres)
 _FLAME_TONGUES = (
@@ -186,8 +188,29 @@ _FLAME_TONGUES = (
     (0.12, -0.04, 0.95, 0.07, 0.07, 0.22, (0.95, 0.28, 0.02, 1.0)),
     (-0.10, 0.06, 0.88, 0.07, 0.07, 0.20, (0.95, 0.30, 0.02, 1.0)),
 )
-_SMOKE = ((0.0, 0.0, 1.75, 0.45, 0.45, 0.30), (0.15, 0.10, 2.20, 0.55, 0.50, 0.28), (-0.12, -0.05, 2.45, 0.45, 0.45, 0.15))
-FIRE_LOOK = os.environ.get("SGR_FIRE_LOOK", "flames").lower()  # "flames" | "cones" (the old look)
+# W's FireFX look around the proven flame core (web/src/scene3d/dressing/fire.tsx): animated flame
+# particles and embers, re-positioned every tick by World. No smoke: MuJoCo draws it as hard-edged grey
+# spheres, and with them gemma4:e4b called fire in 21/24 views ("figures in yellow"); without them 24/24.
+FIRE_N_PARTICLES = 24
+FIRE_N_EMBERS = 6
+FLAME_H = 0.75 * 1.5 + 0.4  # W's uHeight at size 1.5
+FLAME_R = 0.32 * 1.5  # W's uRadius
+
+
+@functools.lru_cache(maxsize=1)
+def fire_particle_params():
+    """Per-particle (phase, angle, radius fraction, speed) like W's seeds(); deterministic."""
+    from .rubble import rng
+
+    r = rng(7331)
+    flames = np.array([[r(), r(), r(), 0.9 + r() * 0.7] for _ in range(FIRE_N_PARTICLES)])
+    for _ in range(8 * 4):  # W's 8 smoke seeds: keep drawing them so the embers stay as Gemma-tested
+        r()
+    embers = np.array([[r(), r(), r(), 0.35 + r() * 0.3] for _ in range(FIRE_N_EMBERS)])
+    return flames, embers
+
+
+FIRE_LOOK =os.environ.get("SGR_FIRE_LOOK", "flames").lower()  # "flames" | "cones" (the old look)
 
 
 def _flame_geoms(prefix: str) -> str:
@@ -201,11 +224,12 @@ def _flame_geoms(prefix: str) -> str:
             f'<geom name="{prefix}_c{i}" type="ellipsoid" size="{rx * s:.3f} {ry * s:.3f} {rz * s:.3f}" '
             f'pos="{x * s:.3f} {y * s:.3f} {z * s:.3f}" material="mat_fire" rgba="{rgba(c)}" group="1" {_VIS}/>'
         )
-    for i, (x, y, z, rx, ry, rz) in enumerate(_SMOKE):
-        out.append(
-            f'<geom name="{prefix}_smoke{i}" type="ellipsoid" size="{rx * s:.3f} {ry * s:.3f} {rz * s:.3f}" '
-            f'pos="{x * s:.3f} {y * s:.3f} {z * s:.3f}" material="mat_matte" rgba="0.16 0.15 0.15 0.72" group="1" {_VIS}/>'
-        )
+    for i in range(FIRE_N_PARTICLES):  # positions / colours / sizes set by World every tick
+        out.append(f'<geom name="{prefix}_p{i}" type="ellipsoid" size="0.11 0.11 0.15" pos="0 0 0.3" '
+                   f'material="mat_fire_hot" rgba="1 0.6 0.1 0.8" group="1" {_VIS}/>')
+    for i in range(FIRE_N_EMBERS):
+        out.append(f'<geom name="{prefix}_e{i}" type="sphere" size="0.018" pos="0 0 1.0" '
+                   f'material="mat_fire" rgba="1 0.6 0.24 0.9" group="1" {_VIS}/>')
     return "\n".join(out)
 
 
@@ -262,13 +286,34 @@ def decoy_panel(name: str, x: float, y: float, normal_yaw: float) -> str:
     )
 
 
-def debris_geom(name: str, contype: int = 1, conaffinity: int = 1) -> str:
+DEBRIS_COLLISION_GROUP = 4  # the 2 m block: physics + LiDAR + line of sight only, never drawn
+
+
+def _rubble_mesh_assets() -> list[str]:
+    from . import rubble
+
+    out = []
+    for seed in range(1, rubble.N_VARIANTS + 1):
+        for col, (v, f) in rubble.pile(seed).items():
+            vs = " ".join(f"{x:.4f}" for x in v.ravel())
+            fs = " ".join(str(i) for i in f.ravel())
+            out.append(f'<mesh name="rb{seed}_{col}" vertex="{vs}" face="{fs}" inertia="shell"/>')
+    return out
+
+
+def debris_geom(name: str, contype: int = 1, conaffinity: int = 1, variant: int = 1) -> str:
+    """Debris: an invisible 2 m collision block (what LiDAR and the drones hit), dressed as W's rubble pile."""
+    from . import rubble
+
     sx, sy, sz = DEBRIS_SIZE
-    return (
-        f'<geom name="{name}" type="box" size="{sx / 2} {sy / 2} {sz / 2}" pos="0 0 {sz / 2}" '
-        f'rgba="{rgba(DEBRIS_RGBA)}" material="mat_matte" group="0" '
-        f'contype="{contype}" conaffinity="{conaffinity}"/>'
-    )
+    out = [f'<geom name="{name}" type="box" size="{sx / 2} {sy / 2} {sz / 2}" pos="0 0 {sz / 2}" '
+           f'rgba="{rgba(DEBRIS_RGBA)}" material="mat_matte" group="{DEBRIS_COLLISION_GROUP}" '
+           f'contype="{contype}" conaffinity="{conaffinity}"/>']
+    seed = (variant - 1) % rubble.N_VARIANTS + 1
+    for col in rubble.pile(seed):
+        out.append(f'<geom name="{name}_rb_{col}" type="mesh" mesh="rb{seed}_{col}" '
+                   f'rgba="{rgba((*rubble.COLOURS[col], 1.0))}" material="mat_matte" group="1" {_VIS}/>')
+    return "\n".join(out)
 
 
 def camera_xyaxes(yaw: float = 0.0, tilt_deg: float = CAM_TILT_DEG) -> str:
