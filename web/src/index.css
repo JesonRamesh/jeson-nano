@@ -1,0 +1,29 @@
+:root {
+  --bg: #0e1014;
+  --panel: #171a21;
+  --border: #2a2f3a;
+  --text: #d8dde6;
+  --muted: #8a93a3;
+  --ok: #3ddc84;
+  --warn: #ffb020;
+  --bad: #ff4d4f;
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  /* Projector-readable: body text >= 16 px (spec §10.1). */
+  font: 18px/1.4 var(--sans);
+  color: var(--text);
+  background: var(--bg);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}

@@ -1,0 +1,219 @@
+{
+  "version": 1,
+  "name": "test",
+  "grid": {
+    "file": "grid.png",
+    "resolution": 0.1,
+    "origin": [
+      0.0,
+      0.0
+    ]
+  },
+  "scan": null,
+  "entrance": {
+    "x": 2.0,
+    "y": 3.0,
+    "yaw": 0.0
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "n1",
+        "x": 2.0,
+        "y": 3.0,
+        "kind": "entrance"
+      },
+      {
+        "id": "n2",
+        "x": 8.0,
+        "y": 3.0,
+        "kind": "junction"
+      },
+      {
+        "id": "n3",
+        "x": 20.0,
+        "y": 3.0,
+        "kind": "junction"
+      },
+      {
+        "id": "n4",
+        "x": 8.0,
+        "y": 10.0,
+        "kind": "junction"
+      },
+      {
+        "id": "n5",
+        "x": 2.75,
+        "y": 10.0,
+        "kind": "room"
+      },
+      {
+        "id": "n6",
+        "x": 8.0,
+        "y": 17.0,
+        "kind": "junction"
+      },
+      {
+        "id": "n7",
+        "x": 20.0,
+        "y": 17.0,
+        "kind": "junction"
+      },
+      {
+        "id": "n8",
+        "x": 20.0,
+        "y": 10.0,
+        "kind": "junction"
+      },
+      {
+        "id": "n9",
+        "x": 26.0,
+        "y": 10.0,
+        "kind": "room"
+      },
+      {
+        "id": "n10",
+        "x": 27.0,
+        "y": 3.0,
+        "kind": "door"
+      },
+      {
+        "id": "n11",
+        "x": 2.0,
+        "y": 5.6,
+        "kind": "room"
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "a": "n1",
+        "b": "n2",
+        "width": 1.8
+      },
+      {
+        "id": "e2",
+        "a": "n2",
+        "b": "n3",
+        "width": 1.8
+      },
+      {
+        "id": "e3",
+        "a": "n2",
+        "b": "n4",
+        "width": 1.8
+      },
+      {
+        "id": "e4",
+        "a": "n4",
+        "b": "n5",
+        "width": 1.8
+      },
+      {
+        "id": "e5",
+        "a": "n4",
+        "b": "n6",
+        "width": 1.8
+      },
+      {
+        "id": "e6",
+        "a": "n6",
+        "b": "n7",
+        "width": 1.8
+      },
+      {
+        "id": "e7",
+        "a": "n7",
+        "b": "n8",
+        "width": 1.8
+      },
+      {
+        "id": "e8",
+        "a": "n8",
+        "b": "n3",
+        "width": 1.8
+      },
+      {
+        "id": "e9",
+        "a": "n8",
+        "b": "n9",
+        "width": 1.8
+      },
+      {
+        "id": "e10",
+        "a": "n3",
+        "b": "n10",
+        "width": 1.8
+      },
+      {
+        "id": "e11",
+        "a": "n1",
+        "b": "n11",
+        "width": 1.8
+      }
+    ]
+  },
+  "compromised": [
+    {
+      "edge": "e2",
+      "at": 0.5,
+      "kind": "debris"
+    }
+  ],
+  "fires": [
+    {
+      "x": 25.5,
+      "y": 3.0,
+      "size": 1.5
+    }
+  ],
+  "survivor": {
+    "x": 26.5,
+    "y": 11.0,
+    "yaw": 1.2
+  },
+  "decoy": {
+    "x": 8.7,
+    "y": 6.5,
+    "kind": "orange_panel"
+  },
+  "drones": {
+    "ids": [
+      "D1",
+      "D2",
+      "D3",
+      "D4"
+    ],
+    "start": [
+      [
+        2.0,
+        2.5
+      ],
+      [
+        2.0,
+        3.5
+      ],
+      [
+        2.5,
+        2.5
+      ],
+      [
+        2.5,
+        3.5
+      ]
+    ],
+    "altitude": 1.6
+  },
+  "flare": {
+    "t": 65.0,
+    "target": "D3"
+  },
+  "heat": {
+    "limit_c": 70.0,
+    "ambient_c": 20.0
+  },
+  "beats": {
+    "decoy_drone": "D2",
+    "d3_area_node": "n10"
+  }
+}
