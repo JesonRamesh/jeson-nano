@@ -13,10 +13,12 @@
 import { useFrame } from '@react-three/fiber'
 import { useMemo, useRef, useState } from 'react'
 import type { Fire, GraphNode } from '../../contracts'
+import { useFreeGrid } from '../../state/grid'
 import { sim, useSim } from '../../state/store'
 import { Atmosphere } from './atmosphere'
 import { FireFX } from './fire'
 import { beliefDebris, beliefFires, mergeFires, useScenarioHazards, type DebrisBlock } from './hazards'
+import { GroundMist } from './mist'
 import { RubblePile } from './rubble'
 
 export { FireFX } from './fire'
@@ -34,17 +36,19 @@ export interface DressingProps {
   mapName?: string
   size?: [number, number] // map width, height (m)
   nodes?: GraphNode[]
+  gridUrl?: string // grid.png (for the ground mist); default hello.map.grid_url
   /** 'belief' (default): only what the swarm has found so far. 'world': the scenario's
    *  real fires/debris from the start (uses the editor-only scenario endpoint). */
   reveal?: 'world' | 'belief'
 }
 
-export function Dressing({ mapName, size, nodes, reveal = 'belief' }: DressingProps) {
+export function Dressing({ mapName, size, nodes, gridUrl, reveal = 'belief' }: DressingProps) {
   const hello = useSim((s) => s.hello)
   const name = mapName ?? hello?.map.name
   const w = size?.[0] ?? (hello ? hello.map.size[0] * hello.map.resolution : 0)
   const h = size?.[1] ?? (hello ? hello.map.size[1] * hello.map.resolution : 0)
   const graphNodes = nodes ?? hello?.graph.nodes ?? NO_NODES
+  const grid = useFreeGrid(gridUrl ?? hello?.map.grid_url, hello?.map.resolution ?? 0.1)
   const hazards = useScenarioHazards(reveal === 'world' ? name : undefined)
 
   // what the swarm has marked: fires (incl. the flare-up) and LiDAR-detected debris
@@ -81,6 +85,7 @@ export function Dressing({ mapName, size, nodes, reveal = 'belief' }: DressingPr
   return (
     <group name="dressing">
       <Atmosphere width={w} height={h} nodes={graphNodes} fog={lite ? 0.025 : 0.045} />
+      {grid && !lite && <GroundMist grid={grid} />}
       {fires.map((f, i) => (
         <FireFX key={`f${i}-${f.x.toFixed(1)}-${f.y.toFixed(1)}`} x={f.x} y={f.y} size={f.size} smoke={!lite} />
       ))}

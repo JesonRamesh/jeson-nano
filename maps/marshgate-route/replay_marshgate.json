@@ -15,8 +15,7 @@
       "wait": 8,
       "do": "click",
       "mode": "debris",
-      "x": 5.8,
-      "y": 24.8
+      "on_route": 0.31
     },
     {
       "after": "prev",
@@ -39,5 +38,5 @@
       "do": "stop"
     }
   ],
-  "_note": "W: marshgate rehearsal. The judge debris click is pinned to (5.8, 24.8), just south of the n4 junction (wide area, D1 in LiDAR range): a visible REPLAN detour. on_route 0.55 lands in the narrow n8-n9 corridor out of every chain drone's range (undetected). Re-check with tools/replay.py after any map change."
+  "_note": "W: marshgate rehearsal. The judge debris click lands ON the current rescue route at 0.31 (just south of the n4 junction, a wide area, D1/D2 in LiDAR range) -> swarm REPLAN detour. Fixed x/y missed the route with live-Gemma timing; on_route 0.55 (default) lands in the n8-n9 corridor out of range. Verified plain and --mock-latency 7 with the 4-fire layout and flare at 55 s."
 }

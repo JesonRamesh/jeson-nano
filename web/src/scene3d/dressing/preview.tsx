@@ -22,6 +22,7 @@ const VIEWS: Record<string, [number[], number[]]> = {
   rubble: [[6.0, 24.6, 2.2], [9.6, 27.8, 0.5]],
   corridor: [[5.4, 6.5, 1.7], [5.4, 20, 1.3]],
   hall: [[19.0, 33.5, 1.9], [27.5, 32.0, 0.8]],
+  fires: [[22.0, 36.0, 3.2], [26.5, 30.8, 0.6]],
 }
 const toThree = (p: number[]) => new THREE.Vector3(p[0], p[2], -p[1])
 
@@ -74,7 +75,7 @@ function App() {
         <Suspense fallback={null}>
           <Scan transform={tf} />
         </Suspense>
-        <Dressing mapName={MAP} size={size} nodes={sc.graph.nodes} reveal="world" />
+        <Dressing mapName={MAP} size={size} nodes={sc.graph.nodes} gridUrl={`/maps/${MAP}/grid.png`} reveal="world" />
       </group>
       <OrbitControls target={toThree(target)} makeDefault />
     </Canvas>

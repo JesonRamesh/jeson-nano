@@ -7,12 +7,12 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { rng } from './hazards'
 import { smokePuff } from './textures'
 
-const CONCRETE = new THREE.Color('#a29e97')
-const CONCRETE_LIGHT = new THREE.Color('#bdb8b0')
-const BRICK = new THREE.Color('#9a5f4c')
-const WOOD = new THREE.Color('#8a6442')
-const STEEL = new THREE.Color('#6d7178')
-const RUST = new THREE.Color('#8a4c2c')
+const CONCRETE = new THREE.Color('#8e735c') // brown shades: dusty earth / mud brick
+const CONCRETE_LIGHT = new THREE.Color('#a8896b')
+const BRICK = new THREE.Color('#8f4f35')
+const WOOD = new THREE.Color('#6e4a2c')
+const STEEL = new THREE.Color('#5c4a3c')
+const RUST = new THREE.Color('#7a3f22')
 
 const LIGHT = new THREE.Vector3(0.35, 0.25, 0.9).normalize()
 
@@ -139,9 +139,9 @@ export function RubblePile({ x, y, yaw = 0, seed = 1, dust = true }: { x: number
       <mesh geometry={geo} material={rubbleMat} castShadow={false} receiveShadow={false} />
       <mesh position={[0, 0, 0.01]} renderOrder={1}>
         <circleGeometry args={[0.95, 24]} />
-        <meshBasicMaterial map={smokePuff()} color="#7b746a" transparent opacity={0.9} depthWrite={false} polygonOffset polygonOffsetFactor={-1} />
+        <meshBasicMaterial map={smokePuff()} color="#7a6048" transparent opacity={0.9} depthWrite={false} polygonOffset polygonOffsetFactor={-1} />
       </mesh>
-      {dust && <Sparkles count={10} scale={[1.2, 1.2, 1.4]} position={[0, 0, 0.8]} size={2} speed={0.25} color="#b8b0a2" opacity={0.5} />}
+      {dust && <Sparkles count={10} scale={[1.2, 1.2, 1.4]} position={[0, 0, 0.8]} size={2} speed={0.25} color="#b39a80" opacity={0.5} />}
     </group>
   )
 }
