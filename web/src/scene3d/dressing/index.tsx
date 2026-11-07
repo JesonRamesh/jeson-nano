@@ -18,8 +18,8 @@ import { sim, useSim } from '../../state/store'
 import { Atmosphere } from './atmosphere'
 import { FireFX } from './fire'
 import { beliefDebris, beliefFires, mergeFires, useScenarioHazards, type DebrisBlock } from './hazards'
-import { GroundMist } from './mist'
 import { RubblePile } from './rubble'
+import { SmokeField } from './smokefield'
 
 export { FireFX } from './fire'
 export { RubblePile } from './rubble'
@@ -85,7 +85,7 @@ export function Dressing({ mapName, size, nodes, gridUrl, reveal = 'belief' }: D
   return (
     <group name="dressing">
       <Atmosphere width={w} height={h} nodes={graphNodes} fog={lite ? 0.025 : 0.045} />
-      {grid && !lite && <GroundMist grid={grid} />}
+      {grid && !lite && <SmokeField grid={grid} fires={fires} />}
       {fires.map((f, i) => (
         <FireFX key={`f${i}-${f.x.toFixed(1)}-${f.y.toFixed(1)}`} x={f.x} y={f.y} size={f.size} smoke={!lite} />
       ))}
