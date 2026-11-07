@@ -21,7 +21,8 @@ from typing import Annotated, Any, Literal, Union
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
+# v2: Scenario.checkpoints, Checkpoint.node (W's authored checkpoints), SwarmState.relook_requests (§8.4)
 
 
 class _Base(BaseModel):
@@ -234,6 +235,9 @@ class Scenario(_Base):
     flare: Flare | None = None
     heat: Heat = Heat()
     beats: Beats = Beats()
+    # Authored by W in the route editor: expected chain positions, for the editor overlay and tests.
+    # NEVER copied into PriorMap: the last one sits on the survivor (honesty rule).
+    checkpoints: list[Checkpoint] = []
 
     @classmethod
     def load(cls, path: str | Path) -> Scenario:
@@ -362,6 +366,10 @@ class Checkpoint(_Base):
     x: float
     y: float
     drone: str | None = None
+    node: str | None = None  # route-graph node id, when the checkpoint sits on a node
+
+
+Scenario.model_rebuild()  # Scenario.checkpoints refers to Checkpoint, defined just above
 
 
 class SurvivorState(_Base):
@@ -618,6 +626,9 @@ class SwarmState(_Base):
     map_delta: list[tuple[int, int, CellState]] = []
     searched_delta: list[tuple[int, int]] = []
     events: list[EventMsg] = []
+    # Detection ids to re-look at this tick. The swarm only asks once a drone is ~2 m in front of the
+    # target and facing it (§8.4); the loop forwards each one to Perception.request_relook().
+    relook_requests: list[str] = []
 
 
 class PriorMap(_Base):
