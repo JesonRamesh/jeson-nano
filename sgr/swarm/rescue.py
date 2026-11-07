@@ -33,6 +33,7 @@ SAME_ROUTE_LEN_M = 0.5  # a re-plan this close in length ...
 SAME_ROUTE_SKIP_M = 1.5  # ignore the start of a re-plan when comparing (it starts at the firefighter)
 SAME_ROUTE_DEV_M = 1.5  # ... and never further than this from the old line is the same route (equal-cost lanes in open halls are ~1 m apart)
 OLD_ROUTE_S = 6.0
+REPLAN_SETTLE_S = 1.0  # after a re-plan, more of the same blockage is folded into one follow-up (first one: instant)
 NO_ROUTE_RECHECK_S = 2.0
 WATCH_M = 3.3  # fire-watch distance: ~55 °C on the heat model, under the 70 °C retreat limit
 TURN_DEG = 35.0
@@ -60,6 +61,7 @@ class Rescue:
     _next_check: float = 0.0
     _chain_key: tuple | None = None
     _chain_t: float | None = None  # when the chain formed
+    _last_replan: float = -1e9  # sim time of the last REPLAN / NO_ROUTE
     ff: Pt | None = None  # Act 2: the firefighter's tracked position (None in Act 1)
 
     # ------------------------------------------------------------------ inputs
@@ -67,6 +69,8 @@ class Rescue:
         """New blocked_new / fire cells this tick: re-plan if they touch the route (Act 2: the route ahead)."""
         if self.path and self.bb.route.status == "ok" and path_hits(self._ahead(self.path), cells, self.belief,
                                                                     ROUTE_MARGIN_M):
+            if self._pending is not None:  # more of the same blockage before we re-planned: merge it
+                sensor, drone, cells = self._pending[0], self._pending[1], self._pending[2] + cells
             xs = [self.belief.cell_center(i, j) for i, j in cells]
             xy = (float(np.mean([p[0] for p in xs])), float(np.mean([p[1] for p in xs])))
             self._pending = (sensor, drone, cells, xy)
@@ -81,12 +85,17 @@ class Rescue:
             if self.bb.route.status == "idle":
                 self._plan(t, target, first=True)
             elif self._pending is not None:
+                if t - self._last_replan < REPLAN_SETTLE_S:
+                    return self._phase(t, agents, alive)  # just re-planned: let the rest of it come in first
                 self._plan(t, target)
             elif self.bb.route.status == "none" and t >= self._next_check:
                 self._plan(t, target)
             if self.bb.route.status == "ok":
                 self._chain(t, agents, alive, target)
         self._pending = None
+        return self._phase(t, agents, alive)
+
+    def _phase(self, t: float, agents: dict[str, Agent], alive: dict[str, Pose]) -> str:
         if self.bb.route.status == "none":
             return "no_route"
         if not self.roles:
@@ -116,6 +125,7 @@ class Rescue:
                 self.bb.route = Route(points=[], status="none", version=old.version + 1)
                 self.path = None
                 why = self._why()
+                self._last_replan = t
                 self.trace.log(t, "swarm", "NO_ROUTE", f"No safe route to the survivor{why}. Holding.",
                                self._evidence(fallback={"from": [round(start[0], 2), round(start[1], 2)],
                                                         "to": list(target)}))
@@ -136,6 +146,7 @@ class Rescue:
                       else f"Safe route found again: {length:.1f} m")
             self.trace.log(t, "swarm", "REPLAN", reason,
                            self._evidence(fallback={"length_m": round(length, 1)}))
+            self._last_replan = t
             self.bb.event("replan", xy=self._pending[3] if self._pending else None)
         self.path = new
         self.bb.route = Route(points=pts, status="ok", version=old.version + 1)

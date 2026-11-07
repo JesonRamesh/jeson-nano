@@ -16,7 +16,8 @@
       "wait": 8,
       "do": "click",
       "mode": "debris",
-      "on_route": 0.55
+      "x": 5.8,
+      "y": 24.8
     },
     {
       "after": "prev",
