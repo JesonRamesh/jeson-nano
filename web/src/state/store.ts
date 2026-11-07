@@ -30,11 +30,23 @@ export interface BeliefGrid {
   version: number // bumped on every change (canvas redraw trigger)
 }
 
+/**
+ * Something banner/auto-director-worthy: a server event, or a dashboard-side cue.
+ * Cue 'survivor_check': a drone's camera flagged a possible person that isn't confirmed
+ * yet (the "uncertain -> closer look -> confirmed" beat, now that the decoy is gone).
+ */
+export type CueKind = 'survivor_check'
+export interface SimEventMsg {
+  kind: EventMsg['kind'] | CueKind
+  drone: string | null
+  xy: [number, number] | null
+}
+
 /** A received event, numbered so identical consecutive events are still distinct. */
 export interface SimEvent {
   seq: number
   at: number // performance.now() when received
-  msg: EventMsg
+  msg: SimEventMsg
 }
 
 export interface Snapshot {
@@ -50,6 +62,7 @@ export interface Snapshot {
 const TRACE_CAP = 1000
 const EVENT_CAP = 20
 const FRAME_DET_CAP = 500
+const SURVIVOR_CUE_GAP_MS = 30_000
 
 /**
  * Dashboard state, fed by useSocket. Components read slices with useSim(selector).
@@ -62,6 +75,8 @@ class SimStore {
   /** Latest detection per frame_id, for drawing boxes on trace evidence frames. */
   detectionsByFrame = new Map<string, DetectionMsg>()
   private eventSeq = 0
+  private survivorFound = false
+  private lastCue = new Map<string, number>()
   private listeners = new Set<() => void>()
 
   subscribe = (fn: () => void) => {
@@ -93,6 +108,8 @@ class SimStore {
         // New session (server restart / reconnect): drop old per-run data.
         this.set({ hello: msg, state: null, trace: [], detections: {}, events: [] })
         this.detectionsByFrame.clear()
+        this.survivorFound = false
+        this.lastCue.clear()
         break
       }
       case 'state':
@@ -105,6 +122,7 @@ class SimStore {
         const { type: _type, ...row } = msg
         const trace = this.snap.trace.length >= TRACE_CAP ? this.snap.trace.slice(-TRACE_CAP + 1) : this.snap.trace
         this.set({ trace: [...trace, row] })
+        this.maybeSurvivorCueFromTrace(row)
         break
       }
       case 'detection':
@@ -113,16 +131,49 @@ class SimStore {
           this.detectionsByFrame.delete(this.detectionsByFrame.keys().next().value!)
         }
         this.set({ detections: { ...this.snap.detections, [msg.drone]: msg } })
+        this.maybeSurvivorCue(msg)
         break
       case 'budget':
         this.set({ budget: msg, budgetAt: performance.now() })
         break
       case 'event':
-        this.set({ events: [...this.snap.events.slice(-EVENT_CAP + 1), { seq: ++this.eventSeq, at: performance.now(), msg }] })
+        if (msg.kind === 'survivor_found') this.survivorFound = true
+        this.pushEvent({ kind: msg.kind, drone: msg.drone, xy: msg.xy })
         break
       default:
         break // guidance / summary: Act 2 (Day 2)
     }
+  }
+
+  private pushEvent(msg: SimEventMsg) {
+    this.set({ events: [...this.snap.events.slice(-EVENT_CAP + 1), { seq: ++this.eventSeq, at: performance.now(), msg }] })
+  }
+
+  /** Unconfirmed person in a detection (real detector: boxes carry the label). */
+  private maybeSurvivorCue(d: DetectionMsg) {
+    if (d.status === 'confirmed' || d.status === 'rejected') return
+    if (d.boxes.some((b) => b.label === 'person')) this.survivorCue(d.drone)
+  }
+
+  /** INSPECT / UNCONFIRMED about a person (mock perception sends no boxes, so also read the trace). */
+  private maybeSurvivorCueFromTrace(row: TraceRow) {
+    if (row.action === 'SURVIVOR_CONFIRMED') this.survivorFound = true
+    if (row.action !== 'INSPECT' && row.action !== 'UNCONFIRMED') return
+    // Only live rows: after a snapshot load the loop replays old trace rows before any state.
+    const st = this.snap.state
+    if (!st || row.t < st.t - 3) return
+    const det = row.evidence.frame_id ? this.detectionsByFrame.get(row.evidence.frame_id) : undefined
+    const person = det?.boxes.some((b) => b.label === 'person') || /person|survivor/i.test(row.reason)
+    if (person) this.survivorCue(row.drone)
+  }
+
+  /** Cue once per drone (again after 30 s) until the survivor is confirmed. */
+  private survivorCue(drone: string) {
+    if (this.survivorFound) return
+    const now = performance.now()
+    if (now - (this.lastCue.get(drone) ?? -Infinity) < SURVIVOR_CUE_GAP_MS) return
+    this.lastCue.set(drone, now)
+    this.pushEvent({ kind: 'survivor_check', drone, xy: null })
   }
 
   private applyDelta(cells: [number, number, CellState][], searched: [number, number][]) {
