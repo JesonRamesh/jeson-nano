@@ -56,11 +56,14 @@ def test_pending_holds_low_conf_approaches_then_relooks_from_2m(swarm: Swarm) ->
     # put D2 at the standoff point, facing the target -> the swarm asks for the re-look
     face = math.atan2(DECOY[1] - sy, DECOY[0] - sx)
     poses["D2"] = Pose(x=sx, y=sy, z=1.6, yaw=face)
-    asked = []
+    asked, rows = [], []
     for k in range(3):
-        _, _, st = swarm.tick(0.2 + 0.1 * k, _readings(0.2 + 0.1 * k, poses), [])
+        _, r, st = swarm.tick(0.2 + 0.1 * k, _readings(0.2 + 0.1 * k, poses), [])
         asked += st.relook_requests
+        rows += r
     assert asked == ["det0001"]  # exactly once
+    ask = [r for r in rows if r.action == "INSPECT" and "closer look" in r.reason]
+    assert len(ask) == 1 and "facing it" in ask[0].reason and "(1/2)" in ask[0].reason
 
     _, rows, st = swarm.tick(0.6, _readings(0.6, poses), [_det("rejected", relooks=1, gemma=0.8)])
     assert "REJECT_DETECTION" in _actions(rows)
@@ -85,6 +88,27 @@ def test_confirmed_fire_becomes_no_go_cells(swarm: Swarm) -> None:
     assert swarm.belief.state[j, i] == FIRE
     assert (i, j, "fire") in st.map_delta
     assert any(e.kind == "fire_confirmed" for e in st.events)
+
+
+def test_uncertain_survivor_is_confirmed_after_a_closer_look(swarm: Swarm) -> None:
+    """The Act 1 'uncertain, then corrected' beat: low_conf person -> closer look -> confirmed."""
+    xy = (26.5, 11.0)
+    poses = {"D1": Pose(x=22.0, y=10.0, z=1.6)}
+    swarm.tick(0.0, _readings(0.0, poses), [_det("pending", label="person", xy=xy)])
+    _, rows, _ = swarm.tick(0.1, _readings(0.1, poses), [_det("low_conf", gemma=0.4, label="person", xy=xy)])
+    assert "a possible person" in rows[-1].reason and "moving closer" in rows[-1].reason
+    sx, sy = swarm.hazards.active["det0001"].standoff
+    poses["D1"] = Pose(x=sx, y=sy, z=1.6, yaw=math.atan2(xy[1] - sy, xy[0] - sx))
+    asked, rows = [], []
+    for k in range(3):  # in_position is known after the drone's own step: the request comes next tick
+        _, r, st = swarm.tick(0.2 + 0.1 * k, _readings(0.2 + 0.1 * k, poses), [])
+        asked += st.relook_requests
+        rows += r
+    assert asked == ["det0001"]
+    assert any("possible person, facing it" in r.reason for r in rows)
+    _, rows, st = swarm.tick(1.5, _readings(1.5, poses), [_det("confirmed", relooks=1, gemma=0.93, label="person", xy=xy)])
+    row = next(r for r in rows if r.action == "SURVIVOR_CONFIRMED")
+    assert "after a closer look" in row.reason
 
 
 def test_confirmed_person_sets_the_survivor(swarm: Swarm) -> None:
