@@ -1,14 +1,16 @@
+/* Act 1 layout (spec §10.1): 1920×1080, body text ≥ 16 px, trace ≥ 18 px. */
+
 .dash {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: 100vh;
 }
 
 .topbar {
   display: flex;
   gap: 24px;
   align-items: center;
-  padding: 10px 16px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
@@ -19,47 +21,151 @@
 
 .muted { color: var(--muted); }
 .mono { font-family: var(--mono); }
+.small { font-size: 16px; }
 .bad { color: var(--bad); font-weight: 700; }
+.ok { color: var(--ok); font-weight: 700; }
 
-.grid4 {
+h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.act1 {
   flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr 360px;
+  grid-template-rows: 1fr 300px;
+  grid-template-areas:
+    'map drones drones'
+    'trace trace budget';
+  gap: 10px;
+  padding: 10px;
+}
+
+.map-area { grid-area: map; min-height: 0; min-width: 0; }
+.drones {
+  grid-area: drones;
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
   min-height: 0;
 }
+.trace-panel { grid-area: trace; }
+.budget-panel { grid-area: budget; }
 
+.trace-panel,
+.budget-panel,
+.map-area,
+.drone-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* ---- belief map ---- */
+.belief-map {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.belief-map canvas { position: absolute; inset: 0; }
+.map-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  display: flex;
+  gap: 12px;
+  font-size: 16px;
+}
+.map-legend {
+  position: absolute;
+  bottom: 6px;
+  left: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 16px;
+  text-shadow: 0 0 3px #000;
+}
+
+/* ---- drone panels ---- */
 .drone-panel {
   display: flex;
   flex-direction: column;
-  border: 2px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
+  border-width: 2px;
   min-height: 0;
+  overflow: hidden;
 }
-
-.drone-head {
+.drone-head,
+.drone-foot {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 10px;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  white-space: nowrap;
+  overflow: hidden;
 }
-
+.drone-id { font-weight: 800; font-size: 20px; }
+.drone-task { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.drone-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 6px;
+  padding: 0 6px;
+}
 .drone-cam {
   position: relative;
   flex: 1;
-  min-height: 0;
+  min-width: 0;
+  max-height: 100%;
+  aspect-ratio: 4 / 3;
+  align-self: center;
   background: #000;
 }
-
-.drone-cam img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  display: block;
+.drone-cam img { width: 100%; height: 100%; display: block; }
+.drone-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 88px;
 }
+.lidar-polar { width: 84px; height: 84px; }
+.temp { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 0; font-size: 16px; }
+.temp-bar {
+  position: relative;
+  flex: 1;
+  width: 16px;
+  min-height: 30px;
+  background: #0b0d11;
+  border: 1px solid var(--border);
+}
+.temp-fill { position: absolute; bottom: 0; left: 0; right: 0; background: var(--warn); }
+.temp-fill.hot { background: var(--bad); }
+.temp-limit { position: absolute; left: -4px; right: -4px; height: 2px; background: var(--bad); }
+
+.bbox { position: absolute; border: 2px solid var(--warn); }
+.bbox span {
+  position: absolute;
+  top: -22px;
+  left: -2px;
+  padding: 0 4px;
+  font-size: 16px;
+  background: var(--warn);
+  color: #000;
+  white-space: nowrap;
+}
+.bbox-person { border-color: #d4ff3d; }
+.bbox-person span { background: #d4ff3d; }
+
+.gemma-caption { overflow: hidden; text-overflow: ellipsis; }
 
 .signal-lost {
   position: absolute;
@@ -70,4 +176,47 @@
   font-weight: 800;
   color: var(--bad);
   background: repeating-linear-gradient(0deg, #111 0 2px, #222 2px 4px);
+  animation: static-shift 0.15s steps(2) infinite;
 }
+@keyframes static-shift { to { background-position: 0 3px; } }
+
+.chip {
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 16px;
+  font-weight: 700;
+  background: #262b35;
+  white-space: nowrap;
+}
+.chip-ok { background: #1e4d33; color: var(--ok); }
+.chip-warn { background: #4d3a12; color: var(--warn); }
+.chip-bad { background: #4d1a1b; color: var(--bad); }
+
+/* ---- trace ---- */
+.trace-panel { display: flex; flex-direction: column; padding: 8px 10px; min-height: 0; }
+.trace-panel ul {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  font-size: 18px;
+}
+.trace-row { padding: 3px 4px; border-bottom: 1px solid #20242d; cursor: pointer; }
+.trace-row:hover, .trace-row.open { background: #1d212a; }
+.trace-line { display: flex; gap: 10px; align-items: baseline; }
+.trace-t { width: 64px; flex: none; text-align: right; }
+.trace-drone { width: 56px; flex: none; font-weight: 700; }
+.trace-reason { flex: 1; }
+.trace-evidence { display: flex; gap: 20px; padding: 2px 0 2px 140px; font-size: 16px; }
+.trace-empty { padding: 6px; }
+.action-REJECT_DETECTION, .action-CONFIRM_HAZARD { background: #4d3a12; color: var(--warn); }
+.action-MARK_BLOCKED, .action-DRONE_LOST, .action-NO_ROUTE, .action-RETREAT { background: #4d1a1b; color: var(--bad); }
+.action-REPLAN, .action-SURVIVOR_CONFIRMED, .action-MISSION_COMPLETE { background: #1e4d33; color: var(--ok); }
+
+/* ---- budget ---- */
+.budget-panel { padding: 8px 12px; font-size: 16px; overflow: hidden; }
+.budget-panel dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; }
+.budget-panel dt { color: var(--muted); }
+.budget-panel dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

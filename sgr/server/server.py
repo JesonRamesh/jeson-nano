@@ -1,17 +1,19 @@
-"""FastAPI server: WS /ws, REST /api/*, static web/dist. Owned by D.
+"""FastAPI server (owned by D): WS /ws, REST /api/*, map files, static web/dist.
 
-The sim loop (main thread) and this server (background thread) talk only
-through two thread-safe queues:
+Runs uvicorn on a background thread; the sim loop keeps the main thread (GL).
+It talks to the sim loop ONLY through ``sgr.bus.Bus``:
 
-* ``outbound``: sim -> browsers. Items are JSON-able dicts (``{"type": ...}``)
-  or :class:`Frame` (a drone camera JPEG).
-* ``inbound``: browsers -> sim. Items are the client JSON dicts (``click``,
-  ``undo``, ``control``, ...), already parsed.
+* outbound: ``Bus.drain_outbound()`` -> ``JsonOut`` (text) / ``FrameOut`` (binary)
+  broadcast to every browser. Frames also go into a ring buffer for trace evidence.
+* inbound: browser JSON -> ``parse_client_message`` -> ``Bus.send_command``.
 
-PROVISIONAL: once S pushes ``sgr/bus.py``, ``start_server`` takes the bus
-queues instead of creating its own. The rest stays the same.
+The server builds the ``hello`` message itself from the scenario (structure only,
+no hidden fields) and sends it to every browser on connect.
 
-Binary frame wire format: ``[u8 channel][u32 frame_seq big-endian][JPEG]`` (``sgr.contracts.pack_frame``).
+Usage (from sgr/app.py)::
+
+    from sgr.server import start_server
+    start_server(bus, args.map, scenario)
 """
 
 from __future__ import annotations
@@ -19,101 +21,147 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import queue
+import subprocess
+import sys
 import threading
 from collections import deque
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 
-from sgr.contracts import pack_frame
+from sgr import config
+from sgr.bus import Bus, FrameOut, JsonOut
+from sgr.contracts import (
+    DroneMeta,
+    HelloMsg,
+    MapMeta,
+    PriorMap,
+    Scenario,
+    Transform,
+    parse_client_message,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WEB_DIST = REPO_ROOT / "web" / "dist"
 MAPS_DIR = REPO_ROOT / "maps"
+PROPOSE_GRAPH = REPO_ROOT / "tools" / "propose_graph.py"
 
 FRAME_RING = 300  # frames kept per drone for trace evidence (spec §10.2)
-CLIENT_QUEUE = 64  # per-browser backlog before we start dropping
+CLIENT_QUEUE = 256  # per-browser backlog before we start dropping the oldest
+MAP_FILES = {"grid.png", "scan.glb", "transform.json", "preview.png"}
 
 
-@dataclass(frozen=True)
-class Frame:
-    channel: int  # 1–4 = D1–D4
-    seq: int
-    jpeg: bytes
+# ---------------------------------------------------------------------------
+# hello
+# ---------------------------------------------------------------------------
 
-    @property
-    def frame_id(self) -> str:
-        return f"D{self.channel}-{self.seq}"
 
-    def to_bytes(self) -> bytes:
-        return pack_frame(self.channel, self.seq & 0xFFFFFFFF, self.jpeg)
+def build_hello(map_dir: Path, scenario: Scenario) -> HelloMsg:
+    """Public map info for the browser. Never includes fires/survivor/decoy/compromised."""
+    map_dir = Path(map_dir)
+    free = PriorMap.load_free_grid(map_dir / scenario.grid.file)
+    transform = None
+    if scenario.scan is not None:
+        tpath = map_dir / scenario.scan.transform
+        if tpath.is_file():
+            transform = Transform.model_validate_json(tpath.read_text(encoding="utf-8"))
+    return HelloMsg(
+        map=MapMeta(
+            name=map_dir.name,
+            grid_url=f"/maps/{map_dir.name}/{scenario.grid.file}",
+            resolution=scenario.grid.resolution,
+            size=(free.shape[1], free.shape[0]),
+            origin=scenario.grid.origin,
+            belief_resolution=config.BELIEF_RES,
+        ),
+        graph=scenario.graph,
+        entrance=scenario.entrance,
+        drones=[
+            DroneMeta(id=d, colour=config.DRONE_COLOURS.get(d, "#cccccc")) for d in scenario.drones.ids
+        ],
+        transform=transform,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hub: fan-out + frame ring buffer
+# ---------------------------------------------------------------------------
 
 
 class Hub:
-    """Fans outbound messages out to every connected browser."""
-
-    def __init__(self, outbound: queue.Queue, inbound: queue.Queue) -> None:
-        self.outbound = outbound
-        self.inbound = inbound
+    def __init__(self, bus: Bus, hello: HelloMsg | None) -> None:
+        self.bus = bus
+        self.hello_text = hello.model_dump_json() if hello else None
         self.clients: set[asyncio.Queue] = set()
-        self.hello: str | None = None  # last hello, replayed on connect
-        self.frames: dict[int, deque[Frame]] = {}
+        self._frames: dict[str, deque[FrameOut]] = {}  # drone -> recent frames
         self._frames_lock = threading.Lock()
 
-    # -- frames ring buffer (read by REST from any thread) --
-    def store_frame(self, f: Frame) -> None:
+    def store_frame(self, f: FrameOut) -> None:
         with self._frames_lock:
-            self.frames.setdefault(f.channel, deque(maxlen=FRAME_RING)).append(f)
+            self._frames.setdefault(f.drone, deque(maxlen=FRAME_RING)).append(f)
 
-    def find_frame(self, frame_id: str) -> Frame | None:
-        try:
-            ch_s, seq_s = frame_id.removeprefix("D").split("-", 1)
-            ch, seq = int(ch_s), int(seq_s)
-        except ValueError:
-            return None
+    def find_frame(self, frame_id: str) -> bytes | None:
+        """JPEG bytes for a frame_id still in the ring buffer."""
         with self._frames_lock:
-            for f in reversed(self.frames.get(ch, ())):
-                if f.seq == seq:
-                    return f
+            for ring in self._frames.values():
+                for f in reversed(ring):
+                    if f.frame_id == frame_id:
+                        return f.data[5:]  # strip [u8 channel][u32 seq] header
         return None
 
-    # -- broadcast --
     def _broadcast(self, payload: str | bytes) -> None:
         for q in self.clients:
-            if q.full():  # slow client: drop the oldest message
+            if q.full():  # slow browser: drop its oldest message
                 with contextlib.suppress(asyncio.QueueEmpty):
                     q.get_nowait()
             q.put_nowait(payload)
 
     async def pump(self) -> None:
-        """Move items from the thread queue onto the asyncio side."""
+        """Move bus items onto the asyncio side and fan them out."""
         while True:
-            drained = False
-            while True:
-                try:
-                    item: Any = self.outbound.get_nowait()
-                except queue.Empty:
-                    break
-                drained = True
-                if isinstance(item, Frame):
+            items = self.bus.drain_outbound()
+            for item in items:
+                if isinstance(item, FrameOut):
                     self.store_frame(item)
-                    self._broadcast(item.to_bytes())
-                else:
-                    text = json.dumps(item, separators=(",", ":"))
-                    if item.get("type") == "hello":
-                        self.hello = text
-                    self._broadcast(text)
+                    self._broadcast(item.data)
+                elif isinstance(item, JsonOut):
+                    self._broadcast(item.text)
             # Always yield so WS senders run even under a steady stream.
-            await asyncio.sleep(0 if drained else 0.005)
+            await asyncio.sleep(0 if items else 0.005)
+
+    def handle_client_text(self, text: str) -> str | None:
+        """Validate a browser message and forward it to the sim. Returns an error or None."""
+        try:
+            msg = parse_client_message(text)
+        except ValidationError as e:
+            return f"invalid client message: {e.errors()[0].get('msg', 'bad message')}"
+        self.bus.send_command(msg)
+        return None
 
 
-def create_app(hub: Hub) -> FastAPI:
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+
+
+def _map_dir(name: str, active: Path | None) -> Path:
+    if active is not None and name == active.name:
+        return active
+    if not name.replace("_", "").replace("-", "").isalnum():
+        raise HTTPException(400, "bad map name")
+    d = MAPS_DIR / name
+    if not d.is_dir():
+        raise HTTPException(404, f"map {name!r} not found")
+    return d
+
+
+def create_app(hub: Hub, map_dir: Path | None = None) -> FastAPI:
+    active = Path(map_dir).resolve() if map_dir is not None else None
+
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
         task = asyncio.create_task(hub.pump())
@@ -122,12 +170,13 @@ def create_app(hub: Hub) -> FastAPI:
 
     app = FastAPI(title="Swarm-Guided Rescue", lifespan=lifespan)
 
+    # ---- WebSocket ----------------------------------------------------
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:
         await ws.accept()
         q: asyncio.Queue = asyncio.Queue(maxsize=CLIENT_QUEUE)
-        if hub.hello:
-            q.put_nowait(hub.hello)
+        if hub.hello_text:
+            q.put_nowait(hub.hello_text)
         hub.clients.add(q)
 
         async def sender() -> None:
@@ -141,57 +190,102 @@ def create_app(hub: Hub) -> FastAPI:
         send_task = asyncio.create_task(sender())
         try:
             while True:
-                text = await ws.receive_text()
-                try:
-                    msg = json.loads(text)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(msg, dict) and "type" in msg:
-                    hub.inbound.put(msg)
+                err = hub.handle_client_text(await ws.receive_text())
+                if err:
+                    print(f"sgr.server: {err}")
         except WebSocketDisconnect:
             pass
         finally:
             hub.clients.discard(q)
             send_task.cancel()
 
-    @app.get("/api/frames/{frame_id}")
-    def get_frame(frame_id: str) -> Response:
-        f = hub.find_frame(frame_id)
-        if f is None:
-            raise HTTPException(404, "frame not in ring buffer")
-        return Response(f.jpeg, media_type="image/jpeg")
-
+    # ---- REST ---------------------------------------------------------
     @app.get("/api/health")
     def health() -> dict:
         return {"ok": True, "clients": len(hub.clients)}
 
-    if MAPS_DIR.is_dir():
-        app.mount("/maps", StaticFiles(directory=MAPS_DIR), name="maps")
+    @app.get("/api/frames/{frame_id}")
+    def get_frame(frame_id: str) -> Response:
+        jpeg = hub.find_frame(frame_id)
+        if jpeg is None:
+            raise HTTPException(404, "frame not in ring buffer")
+        return Response(jpeg, media_type="image/jpeg")
 
+    @app.get("/api/maps/{name}/scenario")
+    def get_scenario(name: str) -> JSONResponse:
+        """Full scenario incl. hidden fields: for the route editor, never the dashboard."""
+        path = _map_dir(name, active) / "scenario.json"
+        if not path.is_file():
+            raise HTTPException(404, "no scenario.json")
+        return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
+
+    @app.put("/api/maps/{name}/scenario")
+    def put_scenario(name: str, body: dict = Body(...)) -> dict:
+        try:
+            scenario = Scenario.model_validate(body)
+        except ValidationError as e:
+            raise HTTPException(422, e.errors()) from e
+        path = _map_dir(name, active) / "scenario.json"
+        path.write_text(scenario.model_dump_json(indent=2, exclude_none=True) + "\n", encoding="utf-8")
+        return {"ok": True}
+
+    @app.post("/api/maps/{name}/propose_graph")
+    def propose_graph(name: str) -> JSONResponse:
+        """Runs W's tools/propose_graph.py on the map, then returns the updated scenario."""
+        d = _map_dir(name, active)
+        if not PROPOSE_GRAPH.is_file():
+            raise HTTPException(501, "tools/propose_graph.py not available yet (W)")
+        try:
+            r = subprocess.run(
+                [sys.executable, str(PROPOSE_GRAPH), str(d)],
+                capture_output=True, text=True, timeout=120, cwd=REPO_ROOT,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise HTTPException(504, "propose_graph timed out") from e
+        if r.returncode != 0:
+            raise HTTPException(500, (r.stderr or r.stdout)[-2000:])
+        return JSONResponse(json.loads((d / "scenario.json").read_text(encoding="utf-8")))
+
+    # ---- map files ----------------------------------------------------
+    @app.get("/maps/{name}/{file}")
+    def map_file(name: str, file: str) -> FileResponse:
+        if file not in MAP_FILES:
+            raise HTTPException(404)
+        path = _map_dir(name, active) / file
+        if not path.is_file():
+            raise HTTPException(404)
+        return FileResponse(path)
+
+    # ---- built web app (demo) -----------------------------------------
     if WEB_DIST.is_dir():
         app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 
-        # SPA fallback: "/", "/editor", ... all serve index.html.
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str) -> FileResponse:
-            candidate = WEB_DIST / path
-            if path and candidate.is_file() and WEB_DIST in candidate.resolve().parents:
+            if path.startswith(("api/", "maps/", "ws")):
+                raise HTTPException(404)
+            candidate = (WEB_DIST / path).resolve()
+            if path and candidate.is_file() and WEB_DIST.resolve() in candidate.parents:
                 return FileResponse(candidate)
-            return FileResponse(WEB_DIST / "index.html")
+            return FileResponse(WEB_DIST / "index.html")  # "/", "/editor", ...
 
     return app
 
 
 def start_server(
-    outbound: queue.Queue,
-    inbound: queue.Queue,
+    bus: Bus,
+    map_dir: Path | str,
+    scenario: Scenario,
     host: str = "127.0.0.1",
     port: int = 8000,
-) -> tuple[threading.Thread, Hub]:
-    """Run uvicorn on a daemon thread; the sim keeps the main thread (GL)."""
-    hub = Hub(outbound, inbound)
-    config = uvicorn.Config(create_app(hub), host=host, port=port, log_level="warning")
-    server = uvicorn.Server(config)
+) -> threading.Thread:
+    """Start the server on a daemon thread and return it."""
+    map_dir = Path(map_dir)
+    hub = Hub(bus, build_hello(map_dir, scenario))
+    server = uvicorn.Server(
+        uvicorn.Config(create_app(hub, map_dir), host=host, port=port, log_level="warning")
+    )
     thread = threading.Thread(target=server.run, name="sgr-server", daemon=True)
     thread.start()
-    return thread, hub
+    print(f"sgr: dashboard on http://{host}:{port}")
+    return thread
