@@ -51,9 +51,9 @@ the `accent` / `nav_*` emissive to black.
 
 ## Disaster dressing: `<Dressing />`
 
-Fog, low ground mist over the whole floor (from grid.png), red emergency beacons, floating dust; fire (flames, smoke that rises and spreads
-under the ceiling, embers, flickering light, scorch); rubble piles in brown shades (mound, chunks,
-slabs, leaning beam, rebar, dust). All procedural: no files, works offline, CC0.
+Fog, smoke DIFFUSION (a concentration field over grid.png's floor: diffuses cell to cell, walls block it, fires are sources, a thin dark-brown haze everywhere), red emergency beacons, floating dust; fire (flames, smoke that rises and spreads
+under the ceiling, embers, flickering light, scorch); rubble piles in brown shades (faceted fractured chunks, jagged slabs, leaning beam,
+rebar, gravel spill, contact shadow, baked light/AO/dirt mottling). All procedural: no files, works offline, CC0.
 
 **Mount (D, one line inside `<SimFrame>` in `Scene3D.tsx`):**
 
