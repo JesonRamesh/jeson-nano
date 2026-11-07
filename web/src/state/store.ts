@@ -30,6 +30,13 @@ export interface BeliefGrid {
   version: number // bumped on every change (canvas redraw trigger)
 }
 
+/** A received event, numbered so identical consecutive events are still distinct. */
+export interface SimEvent {
+  seq: number
+  at: number // performance.now() when received
+  msg: EventMsg
+}
+
 export interface Snapshot {
   hello: HelloMsg | null
   state: StateMsg | null
@@ -37,10 +44,12 @@ export interface Snapshot {
   detections: Record<string, DetectionMsg>
   budget: BudgetMsg | null
   budgetAt: number // performance.now() when the last budget arrived
-  lastEvent: EventMsg | null
+  events: SimEvent[] // most recent last, capped
 }
 
 const TRACE_CAP = 1000
+const EVENT_CAP = 20
+const FRAME_DET_CAP = 500
 
 /**
  * Dashboard state, fed by useSocket. Components read slices with useSim(selector).
@@ -48,8 +57,11 @@ const TRACE_CAP = 1000
  * the map canvas reads it directly and watches `belief.version`.
  */
 class SimStore {
-  snap: Snapshot = { hello: null, state: null, trace: [], detections: {}, budget: null, budgetAt: 0, lastEvent: null }
+  snap: Snapshot = { hello: null, state: null, trace: [], detections: {}, budget: null, budgetAt: 0, events: [] }
   belief: BeliefGrid | null = null
+  /** Latest detection per frame_id, for drawing boxes on trace evidence frames. */
+  detectionsByFrame = new Map<string, DetectionMsg>()
+  private eventSeq = 0
   private listeners = new Set<() => void>()
 
   subscribe = (fn: () => void) => {
@@ -79,7 +91,8 @@ class SimStore {
           version: 0,
         }
         // New session (server restart / reconnect): drop old per-run data.
-        this.set({ hello: msg, state: null, trace: [], detections: {}, lastEvent: null })
+        this.set({ hello: msg, state: null, trace: [], detections: {}, events: [] })
+        this.detectionsByFrame.clear()
         break
       }
       case 'state':
@@ -95,13 +108,17 @@ class SimStore {
         break
       }
       case 'detection':
+        this.detectionsByFrame.set(msg.frame_id, msg)
+        if (this.detectionsByFrame.size > FRAME_DET_CAP) {
+          this.detectionsByFrame.delete(this.detectionsByFrame.keys().next().value!)
+        }
         this.set({ detections: { ...this.snap.detections, [msg.drone]: msg } })
         break
       case 'budget':
         this.set({ budget: msg, budgetAt: performance.now() })
         break
       case 'event':
-        this.set({ lastEvent: msg })
+        this.set({ events: [...this.snap.events.slice(-EVENT_CAP + 1), { seq: ++this.eventSeq, at: performance.now(), msg }] })
         break
       default:
         break // guidance / summary: Act 2 (Day 2)
