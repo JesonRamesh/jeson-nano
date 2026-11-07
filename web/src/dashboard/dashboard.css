@@ -322,3 +322,10 @@ h2 {
 .evidence-frame .gone { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 16px; }
 .evidence-hint { flex: none; font-size: 16px; }
 .trace-evidence { cursor: default; }
+
+/* drone status chips (text comes from the swarm: IDLE / EXPLORING / INSPECTING / RETREAT /
+   WATCHING / CHAIN / SWEEP / TRANSIT / LOST); unknown statuses keep the neutral chip */
+.status-exploring, .status-sweep, .status-transit { background: #1f3550; color: #8cc8ff; }
+.status-inspecting, .status-watching { background: #4d3a12; color: var(--warn); }
+.status-retreat, .status-lost { background: #4d1a1b; color: var(--bad); }
+.status-chain { background: #1e4d33; color: var(--ok); }

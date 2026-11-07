@@ -99,8 +99,8 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
         <span className="drone-id" style={{ color: colour }}>
           {id}
         </span>
-        <span className="chip">{state?.status ?? '—'}</span>
-        <span className="muted drone-task">{state?.task}</span>
+        <span className={`chip status-${(state?.status ?? '').toLowerCase()}`}>{state?.status ?? '—'}</span>
+        <span className="muted drone-task">{state?.task && (alive ? state.task : `last: ${state.task}`)}</span>
         <span ref={seqRef} className="muted mono small" />
       </div>
       <div className="drone-body">
