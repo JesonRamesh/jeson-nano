@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import math
 import queue
 import threading
 import time
@@ -30,6 +31,14 @@ from .fusion import fuse
 from .gemma import GemmaClient, GemmaTimeout
 
 RELOOK_WAIT_S = 3.0
+REJECT_MAX_VIEW_M = 7.0  # a 'not fire / not a person' verdict only rejects if the view was this close
+
+
+def _view_m(cam: CamInfo | None, xy) -> float:
+    """Camera-to-object distance (m); 0 if the pose is unknown."""
+    if cam is None or cam.pose is None:
+        return 0.0
+    return math.hypot(xy[0] - cam.pose.x, xy[1] - cam.pose.y)
 
 
 @dataclass
@@ -39,6 +48,8 @@ class _Track:
     frame_id: str
     job: int | None = None  # seq of the Gemma job we are waiting for
     relook_since: float | None = None  # waiting for a fresh frame since this sim time
+    view_m: float = 0.0  # camera-to-object distance of `frame`
+    job_can_reject: bool = True  # the job in flight is a fresh, close view (may reject)
 
 
 class LivePerception:
@@ -72,30 +83,36 @@ class LivePerception:
                 det = Detection(id=c.det_id, drone=drone, t=t, label=c.label,
                                 world_xy=XY(x=c.world_xy[0], y=c.world_xy[1]), score_fast=c.box.score_fast,
                                 status="pending", frame_id=frame_id, bbox=box)
-                tr = self._tracks[det.id] = _Track(det, frame.copy(), frame_id)
-                self._queue(tr)
+                tr = self._tracks[det.id] = _Track(det, frame.copy(), frame_id, view_m=_view_m(cam, c.world_xy))
+                self._queue(tr, fresh=True)
                 self._out.append(det.model_copy())
             elif (tr := self._tracks.get(c.det_id)) is not None:
-                tr.frame, tr.frame_id = frame.copy(), frame_id
+                tr.frame, tr.frame_id, tr.view_m = frame.copy(), frame_id, _view_m(cam, c.world_xy)
                 tr.det = tr.det.model_copy(update={
                     "world_xy": XY(x=c.world_xy[0], y=c.world_xy[1]),
                     "score_fast": max(tr.det.score_fast, c.box.score_fast), "bbox": box, "drone": drone,
                 })
                 if tr.relook_since is not None and t > tr.relook_since:
-                    self._queue(tr)
-        for tr in self._tracks.values():  # re-look fallback: no fresh view came
+                    self._queue(tr, fresh=True)
+        for tr in self._tracks.values():  # re-look fallback: no fresh view came, re-send the newest frame
             if tr.relook_since is not None and self.now - tr.relook_since >= RELOOK_WAIT_S:
-                self._queue(tr)
+                self._queue(tr, fresh=False)
 
-    def _queue(self, tr: _Track) -> None:
+    def _queue(self, tr: _Track, fresh: bool) -> None:
+        """fresh = this frame is a new sighting. Only a fresh view from within REJECT_MAX_VIEW_M may reject:
+        a stale frame or a far-away view can't show that the object isn't there (live run: a real fire
+        was rejected from an 18 m / stale view and the swarm never found the survivor)."""
         self._seq += 1
         tr.relook_since = None
         tr.job = self._seq
+        tr.job_can_reject = fresh and tr.view_m <= REJECT_MAX_VIEW_M
         self._jobs.put((self._seq, tr.det.id, tr.frame, tr.frame_id))
 
     def _finish(self, tr: _Track, g: GemmaResult | None, frame_id: str) -> None:
         tr.job = None
         combined, status = fuse(tr.det.label, tr.det.score_fast, g, tr.det.relooks)
+        if status == "rejected" and not tr.job_can_reject:
+            status = "unconfirmed"  # couldn't see it properly: needs a second view, not a blacklist
         tr.det = tr.det.model_copy(update={"gemma": g, "combined": combined, "status": status, "frame_id": frame_id})
         if status == "rejected":
             xy = tr.det.world_xy
@@ -181,4 +198,4 @@ class LivePerception:
         self._out = []
         for tr in self._tracks.values():  # checks that were in flight at save time
             if tr.det.status == "pending":
-                self._queue(tr)
+                self._queue(tr, fresh=False)
