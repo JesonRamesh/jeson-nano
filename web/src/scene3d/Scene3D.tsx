@@ -676,7 +676,7 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
         }}
       >
         <FrameCap fps={MAX_FPS} />
-        <color attach="background" args={['#0e1014']} />
+        <color attach="background" args={['#07090b']} />
         <hemisphereLight args={['#c8d2e0', '#202020', 0.9]} />
         <directionalLight position={[10, 30, 10]} intensity={0.8} />
         <SimFrame>
