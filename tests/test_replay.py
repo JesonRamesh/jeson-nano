@@ -21,8 +21,8 @@ def test_default_demo_script_runs_end_to_end(test_map, tmp_path, capsys) -> None
     script = json.loads((ROOT / "tools" / "replay_demo.json").read_text(encoding="utf-8"))
     act1_click = next(s for s in script["steps"] if s["do"] == "click" and "x" in s)
     act1_click.pop("x"), act1_click.pop("y")  # the demo pins a marshgate spot; on maps/test click past the
-    act1_click["on_route"] = 0.08  # entrance, where the lead drone sees it (e1 is the only way in: NO_ROUTE)
-    act1_click["after"], act1_click["wait"] = "chain_ready", 2  # the lead is at the entrance by then
+    act1_click["on_route"] = 0.5  # once the chain is ready, the lead + sentinel patrol the route
+    act1_click["after"], act1_click["wait"] = "chain_ready", 2
     path = tmp_path / "demo_test_map.json"
     path.write_text(json.dumps(script), encoding="utf-8")
     code = replay.main([str(path), "--map", str(test_map), "--fake", "-q", "--snapshots", str(tmp_path)])
@@ -43,8 +43,9 @@ def test_missing_beat_fails_the_replay(test_map, tmp_path, capsys) -> None:
     assert code == 1 and "MISS MISSION_COMPLETE" in capsys.readouterr().out
 
 
-def test_unnoticed_click_fails_the_replay(test_map, tmp_path, capsys) -> None:
+def test_unnoticed_click_fails_the_replay(test_map, tmp_path, capsys, monkeypatch) -> None:
     """A click no drone can see is a silent beat live: the replay must fail loudly (W's report)."""
+    monkeypatch.setattr(replay, "CLICK_REACT_S", 3.0)  # nobody is near the survivor room at t = 2-5 s
     script = {"max_t": 30, "expect": [], "steps": [{"t": 2, "do": "click", "mode": "debris", "x": 26.0, "y": 13.0}]}
     path = tmp_path / "s.json"
     path.write_text(json.dumps(script), encoding="utf-8")

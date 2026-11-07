@@ -8,6 +8,10 @@
 - Chain: route -> RDP -> turn points (> 35°). D_survivor hovers over the survivor, D_lead goes to the
   entrance to meet the firefighter, any other drone takes the largest turns as a sentinel (yaw sweep).
   Rebuilt when the route changes or a drone is lost.
+- Act 1, once the chain is ready (act2_start already saved with everyone at their posts): the lead
+  patrols the first half of the route and the sentinel the second half (LiDAR sweeping as they go), so a
+  judge's debris click anywhere on the route gets noticed. In Act 2 they hold their posts again (P's
+  handover logic expects fixed checkpoints, and the lead meets the firefighter at the entrance).
 - Act 2 (the firefighter's tracked position `ff` is known): re-plans start at the firefighter, only
   blockages AHEAD of them on the route count, the lead is the drone nearest the firefighter and
   sentinels take the turns still ahead (§9 "Route becomes unsafe").
@@ -39,6 +43,8 @@ WATCH_M = 3.3  # fire-watch distance: ~55 °C on the heat model, under the 70 °
 TURN_DEG = 35.0
 CHAIN_READY_M = 0.8  # a chain drone this close to its post is in position
 CHAIN_READY_MAX_S = 40.0  # ... or call the chain ready this long after it formed anyway
+PATROL_END_M = 4.0  # patrol stops this far from the lead / survivor drone (they watch their own ends)
+PATROL_STEP_M = 1.0  # patrol waypoint spacing along the route
 CHAIN_MAX = 3  # survivor + lead + one sentinel (the three checkpoints); extra drones keep exploring
 _RING = np.radians(np.arange(0, 360, 10))
 
@@ -62,6 +68,7 @@ class Rescue:
     _chain_key: tuple | None = None
     _chain_t: float | None = None  # when the chain formed
     _last_replan: float = -1e9  # sim time of the last REPLAN / NO_ROUTE
+    _ready: bool = False  # chain_ready reached (latched: the patrol takes the sentinel off its post)
     ff: Pt | None = None  # Act 2: the firefighter's tracked position (None in Act 1)
 
     # ------------------------------------------------------------------ inputs
@@ -100,7 +107,34 @@ class Rescue:
             return "no_route"
         if not self.roles:
             return "explore"
-        return "chain_ready" if self._chain_ready(t, agents, alive) else "chain"
+        if not self._ready and self._chain_ready(t, agents, alive):
+            self._ready = True
+        self._patrols(agents)
+        return "chain_ready" if self._ready else "chain"
+
+    def _patrols(self, agents: dict[str, Agent]) -> None:
+        """Act 1 + chain ready: the lead and the sentinels split the route and sweep it; Act 2: posts."""
+        walkers = [d for d, r in sorted(self.roles.items(), key=lambda kv: kv[1] != "lead") if r != "survivor"]
+        active = self._ready and self.ff is None and self.path and self.bb.route.status == "ok"
+        if not active or not walkers:
+            for d in walkers:
+                agents[d].patrol(None)
+            return
+        pts = rdp(self.path, 0.1)
+        total = path_length(pts)
+        span = (total - 2 * PATROL_END_M) / len(walkers)
+        for k, d in enumerate(walkers):  # lead first (nearest the entrance), sentinels further along
+            a = PATROL_END_M + k * span
+            agents[d].patrol(self._patrol_points(pts, a - (1.0 if k else 0.0), a + span))
+
+    @staticmethod
+    def _patrol_points(pts: list[Pt], s0: float, s1: float) -> list[Pt]:
+        """Waypoints every PATROL_STEP_M along the route between arc lengths s0 and s1."""
+        out, s = [], max(0.0, s0)
+        while s <= s1:
+            out.append(_point_at(pts, s))
+            s += PATROL_STEP_M
+        return [(round(x, 2), round(y, 2)) for x, y in out]
 
     def _chain_ready(self, t: float, agents: dict[str, Agent], alive: dict[str, Pose]) -> bool:
         """Every chain drone at its post (Act 2 starts here: the lead is at the entrance)."""
@@ -312,6 +346,17 @@ class Rescue:
         d = math.dist(a, b)
         rng = self.belief.march(a[0], a[1], np.array([math.atan2(b[1] - a[1], b[0] - a[0])]), d)[3][0]
         return rng >= d - 0.3
+
+
+def _point_at(pts: list[Pt], s: float) -> Pt:
+    """Point at arc length s along a polyline."""
+    for a, b in zip(pts, pts[1:]):
+        d = math.dist(a, b)
+        if s <= d and d > 0:
+            u = s / d
+            return a[0] + u * (b[0] - a[0]), a[1] + u * (b[1] - a[1])
+        s -= d
+    return pts[-1]
 
 
 def _seg_dist(p: Pt, a: Pt, b: Pt) -> float:

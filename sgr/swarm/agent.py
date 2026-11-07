@@ -34,6 +34,10 @@ INSPECT_SPEED = 0.8
 RETREAT_M = 3.0
 RETREAT_SPEED = 1.0
 RETREAT_TIMEOUT_S = 8.0
+# patrol (Act 1 sentinel sweeping the route with LiDAR)
+PATROL_SPEED = 1.2
+PATROL_WP_M = 0.6  # waypoint reached
+PATROL_STALL_S = 3.0  # no progress for this long (new debris on the route): turn round
 # reflex
 SEP_M = 2.0
 SEP_GAIN = 0.8
@@ -83,6 +87,12 @@ class Agent:
         self._station_mode = "CHAIN"
         self._station_task = ""
         self._spath: list[tuple[float, float]] | None = None
+        # patrol: back and forth along `_patrol` (route waypoints); replaces holding the station
+        self._patrol: list[tuple[float, float]] | None = None
+        self._patrol_k = 0
+        self._patrol_dir = 1
+        self._patrol_best = math.inf
+        self._patrol_t = 0.0
 
     # ---------------------------------------------------------------- orders from the swarm
     def hold(self, focus: tuple[float, float]) -> None:
@@ -121,7 +131,23 @@ class Agent:
         self._station, self._station_face, self._station_sweep = xy, face, sweep
         self._station_mode, self._station_task = mode, task
 
+    def patrol(self, waypoints: list[tuple[float, float]] | None) -> None:
+        """Fly back and forth along `waypoints` (None = stop patrolling, hold the station again)."""
+        if waypoints is None or len(waypoints) < 2:
+            self._patrol = None
+            self._spath = None
+            return
+        if self._patrol == waypoints:
+            return
+        self._patrol, self._patrol_dir, self._patrol_best = list(waypoints), 1, math.inf
+        self._patrol_k = -1  # join at the nearest waypoint (picked on the next step, when the pose is known)
+
+    @property
+    def patrolling(self) -> bool:
+        return self._patrol is not None
+
     def unstation(self) -> None:
+        self._patrol = None
         self._station = self._station_face = self._spath = None
         self._station_sweep = False
         if self.mode in ("CHAIN", "WATCHING"):
@@ -156,7 +182,7 @@ class Agent:
         if self._focus is not None:
             return "closer look" if self._standoff else "waiting for Gemma"
         if self._station is not None:
-            return self._station_task
+            return "patrolling the route" if self._patrol is not None else self._station_task
         return f"area {self.area}" if self.area else ""
 
     def _unsearched(self, belief: BeliefGrid, area: Area) -> np.ndarray:
@@ -255,6 +281,32 @@ class Agent:
             if close:
                 yaw_des = face
             self.in_position = close and abs(_wrap(face - pose.yaw)) < FACING_RAD
+        elif self._station is not None and self._patrol is not None:
+            self.mode = self._station_mode
+            pts = self._patrol
+            if self._patrol_k < 0:  # first step: join the route at the nearest waypoint, head for the far end
+                k = int(np.argmin([math.hypot(x - pose.x, y - pose.y) for x, y in pts]))
+                self._patrol_k, self._patrol_dir = k, (1 if k < len(pts) / 2 else -1)
+                self._patrol_t, self._patrol_best = t, math.inf
+            gx, gy = pts[self._patrol_k]
+            dist = math.hypot(gx - pose.x, gy - pose.y)
+            self._patrol_best = min(self._patrol_best, dist)
+            stalled = t - self._patrol_t > PATROL_STALL_S
+            if dist < PATROL_WP_M or stalled:
+                if stalled and dist >= PATROL_WP_M:  # blocked (e.g. new debris): turn round
+                    self._patrol_dir = -self._patrol_dir
+                nk = self._patrol_k + self._patrol_dir
+                if not 0 <= nk < len(pts):  # end of the stretch: turn round
+                    self._patrol_dir = -self._patrol_dir
+                    nk = self._patrol_k + self._patrol_dir
+                self._patrol_k = max(0, min(len(pts) - 1, nk))
+                self._patrol_t, self._patrol_best = t, math.inf
+                gx, gy = pts[self._patrol_k]
+            d = np.array([gx - pose.x, gy - pose.y])
+            n = float(np.linalg.norm(d))
+            if n > 1e-6:
+                want = d / n * min(PATROL_SPEED, 0.3 + n)
+                yaw_des = math.atan2(d[1], d[0])  # camera looks along the route too
         elif self._station is not None:
             self.mode = self._station_mode
             sx, sy = self._station

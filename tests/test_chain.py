@@ -6,6 +6,8 @@ Drives the Swarm facade with scripted Readings + Detections on maps/test (no Wor
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from sgr.contracts import XY, Detection, GemmaResult, Pose, PriorMap, Readings, Scenario
@@ -142,3 +144,25 @@ def test_act2_blockage_ahead_replans_from_the_firefighter(swarm: Swarm) -> None:
     near_ff = min(swarm.rescue.roles, key=lambda d: (POSES[d].x - ff.x) ** 2 + (POSES[d].y - ff.y) ** 2)
     assert lead == near_ff or swarm.rescue.roles[near_ff] == "survivor"
     assert any(r.action == "CHAIN_POSITION" and "guiding the firefighter" in r.reason for r in rows)
+
+
+# ---- Act 1 patrol: once the chain is ready, the lead + sentinel sweep the route (judge clicks get seen) ----
+
+
+def test_patrol_starts_when_chain_ready_and_stops_in_act2(swarm: Swarm) -> None:
+    swarm.tick(0.0, _r(0.0), [_found()])
+    roles = swarm.rescue.roles
+    walkers = [d for d, r in roles.items() if r != "survivor"]
+    assert not any(swarm.agents[d].patrolling for d in walkers)  # still flying to their posts
+    _, _, st = swarm.tick(41.0, _r(41.0), [])  # 40 s after forming: ready (latched)
+    assert st.phase == "chain_ready"
+    assert all(swarm.agents[d].patrolling for d in walkers)
+    survivor = next(d for d, r in roles.items() if r == "survivor")
+    assert not swarm.agents[survivor].patrolling  # stays over the survivor
+    lead = next(d for d, r in roles.items() if r == "lead")
+    lead_pts, sent_pts = swarm.agents[lead]._patrol, swarm.agents[next(d for d in walkers if d != lead)]._patrol
+    ent = swarm.rescue.entrance
+    assert min(math.dist(p, ent) for p in lead_pts) < min(math.dist(p, ent) for p in sent_pts)  # lead: first half
+    _, _, st = swarm.tick(41.1, _r(41.1), [], ff=Pose(x=2.0, y=3.0))  # Act 2: back to the posts
+    assert not any(swarm.agents[d].patrolling for d in walkers)
+    assert st.phase == "chain_ready"

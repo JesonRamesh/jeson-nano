@@ -92,7 +92,7 @@ DEFAULT_SCRIPT: dict[str, Any] = {
 }
 
 AUTOPILOT_LOOKAHEAD_M = 1.2
-CLICK_REACT_S = 10.0  # a judge click must be noticed within this (sim seconds)
+CLICK_REACT_S = 30.0  # a judge click must be noticed within this (sim s): the patrol sweeps ~30 m stretches
 CLICK_NEAR_M = 2.5  # a MARK_BLOCKED this close to the click counts as noticing it
 KEY_ACTIONS = {"CONFIRM_HAZARD", "REJECT_DETECTION", "RETREAT", "DRONE_LOST", "SURVIVOR_CONFIRMED", "REPLAN",
                "NO_ROUTE", "CHAIN_POSITION", "FF_CORRECTION", "MISSION_COMPLETE", "MARK_BLOCKED", "INSPECT"}
