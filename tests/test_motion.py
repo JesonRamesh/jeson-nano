@@ -142,4 +142,4 @@ def test_flare_never_hits_a_random_drone(test_map) -> None:
     loop = SimLoop(world, Perception(mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight),
                    Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids)), sc, render=False, realtime=False)
     assert loop._flare_victim(waited=5.0) == _WAIT
-    assert loop._flare_victim(waited=31.0) is None  # nobody near a fire: skip the flare-up
+    assert loop._flare_victim(waited=46.0) is None  # nobody near a fire after the 45 s wait: skip the flare-up

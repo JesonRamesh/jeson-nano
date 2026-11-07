@@ -152,15 +152,17 @@ def test_act2_blockage_ahead_replans_from_the_firefighter(swarm: Swarm) -> None:
 def test_patrol_starts_when_chain_ready_and_stops_in_act2(swarm: Swarm) -> None:
     swarm.tick(0.0, _r(0.0), [_found()])
     roles = swarm.rescue.roles
-    walkers = [d for d, r in roles.items() if r != "survivor"]
+    lead_d = next(d for d, r in roles.items() if r == "lead")
+    sent1 = sorted(d for d, r in roles.items() if r == "sentinel")[0]
+    walkers = [lead_d, sent1]
     assert not any(swarm.agents[d].patrolling for d in walkers)  # still flying to their posts
     _, _, st = swarm.tick(41.0, _r(41.0), [])  # 40 s after forming: ready (latched)
     assert st.phase == "chain_ready"
     assert all(swarm.agents[d].patrolling for d in walkers)
     survivor = next(d for d, r in roles.items() if r == "survivor")
-    assert swarm.agents[survivor].patrolling  # covers the last stretch, ending at the survivor
-    sv_pts = swarm.agents[survivor]._patrol
-    assert min(math.dist(p, SURVIVOR) for p in sv_pts) < 2.0
+    assert not swarm.agents[survivor].patrolling  # holds over the survivor (the chain reads as a chain)
+    sentinels = sorted(d for d, r in roles.items() if r == "sentinel")
+    assert [swarm.agents[d].patrolling for d in sentinels] == [True] + [False] * (len(sentinels) - 1)
     lead = next(d for d, r in roles.items() if r == "lead")
     lead_pts, sent_pts = swarm.agents[lead]._patrol, swarm.agents[next(d for d in walkers if d != lead)]._patrol
     ent = swarm.rescue.entrance
