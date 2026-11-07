@@ -252,20 +252,22 @@ def test_live_hard_deadline_drops_late_answer(studio):
 
 
 @needs_gl
-def test_live_decoy_relook_rejected_and_blacklisted(studio):
+def test_live_false_alarm_rejected_after_relooks_and_blacklisted(studio):
+    """Gemma keeps disagreeing with a fire-coloured detection: low_conf, 2 closer looks, rejected, blacklisted."""
     client = ScriptedGemma(lambda f: _g(fire=False, conf=0.8))
     p = Perception(mode="local", pixel_to_world=studio.pixel_to_world, gemma=client, warm=False)
-    _frame(p, studio, "D3", 0.0)
+    _frame(p, studio, "D1", 0.0)
     low = _settle(p)[-1]
-    assert low.label == "fire" and low.status == "low_conf"  # first look never rejects
-    p.request_relook(low.id)
-    assert p.poll()[0].relooks == 1
-    _frame(p, studio, "D3", 1.0, 2)  # the closer view arrives
-    rej = _settle(p)[-1]
-    assert rej.status == "rejected" and client.calls == 2
-    _frame(p, studio, "D3", 2.0, 3)
+    assert low.label == "fire" and low.status == "low_conf"  # a first look never rejects
+    for k in (1, 2):
+        p.request_relook(low.id)
+        assert p.poll()[0].relooks == k
+        _frame(p, studio, "D1", float(k), k + 1)  # the closer view arrives
+        last = _settle(p)[-1]
+    assert last.status == "rejected" and client.calls == 3
+    _frame(p, studio, "D1", 3.0, 4)
     assert p.poll() == []  # blacklisted: no new job
-    assert client.calls == 2
+    assert client.calls == 3
     p.close()
 
 

@@ -54,12 +54,12 @@ def test_survivor_detected_as_person(frames):
     assert boxes[0].score_fast >= 0.75
 
 
-def test_decoy_passes_fire_threshold_but_scores_lower(frames):
-    decoy = detect(frames["decoy"])
-    fire = detect(frames["fire"])
-    assert _labels(decoy) == {"fire"}  # deliberately a false positive (§7.2)
-    assert 0.45 <= decoy[0].score_fast <= 0.70
-    assert decoy[0].score_fast < fire[0].score_fast - 0.15
+def test_matte_orange_panel_is_not_fire(studio, frames):
+    """The decoy was dropped from the demo: a matte orange panel (like orange textures in the real scan)
+    is not fire, head-on or side-on. Only the emissive fire cones pass V >= 240."""
+    assert detect(frames["decoy"]) == []
+    studio.teleport_drone("D4", 14.6, 3.0, math.pi / 2)  # flying north, panel on the right wall
+    assert detect(studio.render_drone("D4")[0]) == []
 
 
 @pytest.mark.parametrize("label,ty,dist", [("fire", 3.0, 5.0), ("person", 8.5, 4.5)])
@@ -70,13 +70,6 @@ def test_detects_out_to_coverage_range(studio, label, ty, dist):
     assert len(boxes) == 1  # one object -> one box (parts are joined)
 
 
-def test_decoy_flagged_at_grazing_angle(studio):
-    """A drone flying past sees the wall panel side-on; it must still pass the fire threshold."""
-    studio.teleport_drone("D4", 14.6, 3.0, math.pi / 2)  # flying north, panel on the right wall
-    boxes = detect(studio.render_drone("D4")[0])
-    assert [b.label for b in boxes] == ["fire"] and 0.45 <= boxes[0].score_fast < 0.7
-
-
 def test_empty_wall_has_no_detections(studio):
     studio.teleport_drone("D4", 9.0, 9.8, math.pi / 2)  # 0.7 m from the north wall
     img, _ = studio.render_drone("D4")
@@ -85,10 +78,9 @@ def test_empty_wall_has_no_detections(studio):
 
 def test_world_positions_dedup_and_blacklist(studio, frames):
     gt = studio.ground_truth()
-    truth = {"fire": (gt.fires[0].x, gt.fires[0].y), "survivor": (gt.survivor.x, gt.survivor.y),
-             "decoy": (gt.decoy.x, gt.decoy.y)}
+    truth = {"fire": (gt.fires[0].x, gt.fires[0].y), "survivor": (gt.survivor.x, gt.survivor.y)}
     fd = FastDetector()
-    for drone, target in VIEWS.items():
+    for drone, target in (("D1", "fire"), ("D2", "survivor")):
         c = fd.process(drone, frames[target], t=0.0, frame_id=f"{drone}-1", pixel_to_world=studio.pixel_to_world)
         assert len(c) == 1 and c[0].is_new
         assert math.dist(c[0].world_xy, truth[target]) < 0.8, (target, c[0].world_xy)
@@ -97,10 +89,10 @@ def test_world_positions_dedup_and_blacklist(studio, frames):
     again = fd.process("D1", frames["fire"], t=1.0, frame_id="D1-2", pixel_to_world=studio.pixel_to_world)
     assert len(again) == 1 and not again[0].is_new
 
-    # Gemma rejects the decoy -> blacklisted for 60 s
-    fd.blacklist("fire", truth["decoy"], t=2.0)
-    assert fd.process("D3", frames["decoy"], t=3.0, frame_id="D3-2", pixel_to_world=studio.pixel_to_world) == []
-    back = fd.process("D3", frames["decoy"], t=63.0, frame_id="D3-3", pixel_to_world=studio.pixel_to_world)
+    # Gemma rejects it -> blacklisted for 60 s
+    fd.blacklist("fire", truth["fire"], t=2.0)
+    assert fd.process("D1", frames["fire"], t=3.0, frame_id="D1-3", pixel_to_world=studio.pixel_to_world) == []
+    back = fd.process("D1", frames["fire"], t=63.0, frame_id="D1-4", pixel_to_world=studio.pixel_to_world)
     assert len(back) == 1 and back[0].is_new
 
 

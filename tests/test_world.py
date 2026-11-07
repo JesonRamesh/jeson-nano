@@ -238,6 +238,24 @@ def test_camera_does_not_see_through_nearby_walls(world):
     assert [b for b in detect(img) if b.label == "person"] == []
 
 
+def test_scan_replica_is_visual_only(world):
+    """W's textured scan (maps/<name>/scan_vis.*) is camera-only: same physics state and LiDAR, walls hidden."""
+    from pathlib import Path
+
+    m = Path(__file__).resolve().parents[1] / "maps" / "marshgate-route"
+    if not (m / "scan_vis.obj").is_file():
+        pytest.skip("no scan replica in this checkout")
+    sc = Scenario.load(m)
+    plain, vis = World(m, sc, scan_vis=False), World(m, sc, scan_vis=True)
+    assert vis.build_info.scan_vis and not plain.build_info.scan_vis
+    assert (vis.lidar("D1") == plain.lidar("D1")).all()
+    assert len(vis.get_state()) == len(plain.get_state())  # snapshots interchangeable
+    vis.set_state(plain.get_state())
+    walls = [g for g in range(vis.model.ngeom) if vis.model.geom(g).name.startswith("wall")]
+    assert all(vis.model.geom_rgba[g, 3] == 0 for g in walls)
+    assert World(m, sc, scan_vis=None).build_info.scan_vis  # on by default when the files exist
+
+
 @needs_gl
 def test_dead_drone_camera_is_static(world):
     world.kill_drone("D4")

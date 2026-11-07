@@ -1,12 +1,12 @@
 """Fast colour detector (spec §7.2).
 
 HSV thresholds, a few ms per 320x240 frame:
-- fire: bright yellow-orange, high V, area >= 0.5 %
-- person: hi-vis yellow-green, area >= 0.15 %
+- fire: bright yellow-orange, V >= 240 (the fire cones are emissive, V = 255), area >= 0.5 %
+- person: hi-vis yellow-green (H 33-42), area >= 0.15 %
 
-The orange decoy panel deliberately passes the fire threshold. It scores
-lower than real fire because it is one flat hue, while fire spans
-red -> orange -> yellow. Gemma has the final say.
+Tuned so the textured scan replica (real wood, signs, bins) gives no false hits: a full sweep of
+marshgate (348 poses) finds 0 false fire / person with or without it. The decoy panel was dropped
+from the demo (team decision) and is matte (V ~227), so it is no longer flagged. Gemma has the final say.
 
 FastDetector adds the stateful parts: world position via pixel_to_world,
 1.0 m de-duplication per label, and a 60 s blacklist for rejected spots.
@@ -24,8 +24,8 @@ import numpy as np
 # OpenCV HSV: H in 0..179, S and V in 0..255
 FIRE_H = (0, 33)
 FIRE_S_MIN = 150
-FIRE_V_MIN = 100  # the matte decoy panel is V 100-190 at grazing angles; S > 150 still rejects walls/floor/debris/skin
-PERSON_H = (34, 50)
+FIRE_V_MIN = 240  # fire cones are emissive (V = 255); orange textures in the real scan replica are V 200-232
+PERSON_H = (33, 42)  # hi-vis survivor H 35-38; a green-yellow texture in the scan replica is H 45-49
 PERSON_S_MIN = 150
 PERSON_V_MIN = 90
 MIN_AREA_FRAC = 0.005  # fire (§7.2)
