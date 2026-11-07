@@ -75,6 +75,14 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
   const imgRef = useRef<HTMLImageElement>(null)
   const seqRef = useRef<HTMLSpanElement>(null)
   const urlRef = useRef<string | null>(null)
+  // Detection boxes belong to ONE frame. They show solid while that frame is on screen,
+  // and otherwise fade out within ~1 s (CSS), so they never sit on newer frames.
+  const boxesRef = useRef<HTMLDivElement>(null)
+  const frameIdRef = useRef('') // frame on screen: "<drone>-<seq>", same format as frame_id
+  const detFrameId = detection?.frame_id ?? ''
+  const syncHold = () => {
+    boxesRef.current?.classList.toggle('hold', frameIdRef.current === detFrameId)
+  }
 
   useImperativeHandle(ref, () => ({
     showFrame(jpeg, seq) {
@@ -83,8 +91,11 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
       if (urlRef.current) URL.revokeObjectURL(urlRef.current)
       urlRef.current = url
       if (seqRef.current) seqRef.current.textContent = `#${seq}`
+      frameIdRef.current = `${id}-${seq}`
+      syncHold()
     },
   }))
+  useEffect(syncHold) // a new detection may be for the frame already on screen
   useEffect(() => () => {
     if (urlRef.current) URL.revokeObjectURL(urlRef.current)
   }, [])
@@ -107,23 +118,27 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
       <div className="drone-body">
         <div className="drone-cam">
           <img ref={imgRef} alt={`${id} camera`} />
-          {alive &&
-            detection?.boxes.map((b, n) => (
-              <div
-                key={n}
-                className={`bbox bbox-${b.label}`}
-                style={{
-                  left: `${(b.x / CAM_W) * 100}%`,
-                  top: `${(b.y / CAM_H) * 100}%`,
-                  width: `${(b.w / CAM_W) * 100}%`,
-                  height: `${(b.h / CAM_H) * 100}%`,
-                }}
-              >
-                <span>
-                  {b.label} {b.score.toFixed(2)}
-                </span>
-              </div>
-            ))}
+          {alive && detection && detection.boxes.length > 0 && (
+            // key: a new detection (or status change) remounts, restarting the fade
+            <div ref={boxesRef} key={`${detection.frame_id}|${detection.status}`} className="boxes">
+              {detection.boxes.map((b, n) => (
+                <div
+                  key={n}
+                  className={`bbox bbox-${b.label}`}
+                  style={{
+                    left: `${(b.x / CAM_W) * 100}%`,
+                    top: `${(b.y / CAM_H) * 100}%`,
+                    width: `${(b.w / CAM_W) * 100}%`,
+                    height: `${(b.h / CAM_H) * 100}%`,
+                  }}
+                >
+                  <span>
+                    {b.label} {b.score.toFixed(2)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
           {!alive && <div className="signal-lost">SIGNAL LOST</div>}
         </div>
         <div className="drone-side">
