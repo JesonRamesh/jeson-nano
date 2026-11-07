@@ -227,6 +227,18 @@ def test_render_and_pixel_ray(world):
 
 
 @needs_gl
+def test_camera_does_not_see_through_nearby_walls(world):
+    """Regression: the near clip plane was 0.7 m (relative to the inflated model extent), so a drone
+    0.23 m from a wall saw the survivor in the room behind it."""
+    assert world.model.vis.map.znear * world.model.stat.extent == pytest.approx(0.02, abs=1e-6)
+    from sgr.perception.detector import detect
+
+    world.teleport_drone("D1", 24.4, 11.0, math.atan2(2.0, 3.1))  # wall at x=24.9, survivor room behind
+    img, _ = world.render_drone("D1")
+    assert [b for b in detect(img) if b.label == "person"] == []
+
+
+@needs_gl
 def test_dead_drone_camera_is_static(world):
     world.kill_drone("D4")
     img, _ = world.render_drone("D4")

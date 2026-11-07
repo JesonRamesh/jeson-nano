@@ -104,6 +104,37 @@ def test_world_positions_dedup_and_blacklist(studio, frames):
     assert len(back) == 1 and back[0].is_new
 
 
+def test_world_rays_use_interior_pixels_only():
+    """Edge pixels (anti-aliased, can clip an occluding wall corner) never carry the world ray."""
+    import cv2
+
+    from sgr.perception.detector import _ray_pixels
+
+    px = np.zeros((240, 320), bool)
+    px[100:120, 150:170] = True  # 20 x 20 blob
+    anchor, samples = _ray_pixels(px)
+    core = cv2.erode(px.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    assert len(samples) == 9 and all(core[v, u] for u, v in (anchor, *samples))
+    tiny = np.zeros((240, 320), bool)
+    tiny[50, 60:62] = True  # erodes to nothing -> falls back to the raw pixels
+    assert _ray_pixels(tiny)[1]
+
+
+def test_world_position_is_median_of_rays():
+    """One stray ray (hits a wall corner 5 m short) must not move the detection."""
+    fd = FastDetector()
+    frame = np.zeros((240, 320, 3), np.uint8)
+    frame[100:140, 140:180] = (255, 120, 0)
+    calls = []
+
+    def p2w(d, u, v):
+        calls.append((u, v))
+        return SimpleNamespace(x=3.0, y=4.0) if len(calls) == 1 else SimpleNamespace(x=8.0, y=4.0)
+
+    c = fd.process("D1", frame, 0.0, "f1", p2w)
+    assert len(calls) == 9 and c[0].world_xy == (8.0, 4.0)
+
+
 def test_detector_state_roundtrip():
     fd = FastDetector()
     fake = lambda d, u, v: SimpleNamespace(x=1.0, y=2.0)  # noqa: E731

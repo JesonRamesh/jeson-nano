@@ -48,7 +48,8 @@ class FastBox:
     bbox: tuple[int, int, int, int]  # x, y, w, h (pixels)
     area_frac: float  # matching-colour pixels / frame pixels
     score_fast: float
-    anchor: tuple[int, int]  # (u, v) matching pixel nearest the blob centroid, used for the world ray
+    anchor: tuple[int, int]  # (u, v) interior pixel nearest the blob centroid
+    samples: tuple[tuple[int, int], ...] = ()  # interior pixels for the world rays (median of their hits)
 
 
 def _blobs(mask: np.ndarray, min_frac: float):
@@ -64,11 +65,25 @@ def _blobs(mask: np.ndarray, min_frac: float):
             yield px, tuple(int(v) for v in stats[i, :4]), area
 
 
-def _anchor(px: np.ndarray) -> tuple[int, int]:
-    """A pixel that is on the object. The bbox centre of a fire cluster can fall between cones."""
-    ys, xs = np.nonzero(px)
+N_RAY_SAMPLES = 9
+_ERODE = np.ones((3, 3), np.uint8)
+
+
+def _ray_pixels(px: np.ndarray) -> tuple[tuple[int, int], tuple[tuple[int, int], ...]]:
+    """(anchor, samples): interior object pixels to cast world rays through.
+
+    Edge pixels are dropped (eroded). Where the object peeks around a wall corner, the anti-aliased
+    edge pixels are object-coloured but their ray clips the corner, which put detections metres
+    short of the target. If erosion leaves nothing (a tiny blob), the raw pixels are used.
+    """
+    core = cv2.erode(px.astype(np.uint8), _ERODE) > 0
+    ys, xs = np.nonzero(core if core.any() else px)
     k = int(np.argmin((xs - xs.mean()) ** 2 + (ys - ys.mean()) ** 2))
-    return int(xs[k]), int(ys[k])
+    anchor = (int(xs[k]), int(ys[k]))
+    idx = np.linspace(0, len(xs) - 1, min(N_RAY_SAMPLES, len(xs))).astype(int)
+    order = np.lexsort((xs, ys))  # spread the samples over the object, top to bottom
+    samples = tuple((int(xs[order[i]]), int(ys[order[i]])) for i in idx)
+    return anchor, samples
 
 
 def detect(frame: np.ndarray) -> list[FastBox]:
@@ -81,13 +96,13 @@ def detect(frame: np.ndarray) -> list[FastBox]:
         hue_std = float(hsv[..., 0][px].std())
         p = FIRE_SCORE
         score = p["base"] + p["w_area"] * min(1.0, area / p["area_full"]) + p["w_cue"] * min(1.0, hue_std / p["cue_full"])
-        out.append(FastBox("fire", bbox, area, round(min(score, 0.99), 3), _anchor(px)))
+        out.append(FastBox("fire", bbox, area, round(min(score, 0.99), 3), *_ray_pixels(px)))
 
     person = cv2.inRange(hsv, (PERSON_H[0], PERSON_S_MIN, PERSON_V_MIN), (PERSON_H[1], 255, 255))
     for px, bbox, area in _blobs(person, PERSON_MIN_AREA_FRAC):
         p = PERSON_SCORE
         score = p["base"] + p["w_area"] * min(1.0, area / p["area_full"])
-        out.append(FastBox("person", bbox, area, round(min(score, 0.99), 3), _anchor(px)))
+        out.append(FastBox("person", bbox, area, round(min(score, 0.99), 3), *_ray_pixels(px)))
 
     out.sort(key=lambda b: -b.area_frac)
     return out
@@ -128,10 +143,9 @@ class FastDetector:
         self._blacklist = [b for b in self._blacklist if b[2] > t]
         out = []
         for box in detect(frame):
-            hit = pixel_to_world(drone, *box.anchor)
-            if hit is None:
+            xy = self._locate(drone, box, pixel_to_world)
+            if xy is None:
                 continue
-            xy = (float(hit.x), float(hit.y))
             if self.is_blacklisted(box.label, xy, t):
                 continue
             tr = self._nearest(box.label, xy)
@@ -146,6 +160,14 @@ class FastDetector:
                 self._tracks.append(tr)
                 out.append(Candidate(tr.det_id, box.label, drone, t, frame_id, box, xy, True))
         return out
+
+    @staticmethod
+    def _locate(drone: str, box: FastBox, pixel_to_world) -> tuple[float, float] | None:
+        """Median of the world hits of the interior sample pixels (robust to a stray ray)."""
+        hits = [h for h in (pixel_to_world(drone, u, v) for u, v in (box.samples or (box.anchor,))) if h is not None]
+        if not hits:
+            return None
+        return float(np.median([h.x for h in hits])), float(np.median([h.y for h in hits]))
 
     def _nearest(self, label: str, xy) -> _Track | None:
         best, bd = None, self.merge_dist

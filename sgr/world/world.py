@@ -40,6 +40,8 @@ FF_PUSH = 1.0
 DEAD_FALL_VZ = -2.0
 DEAD_RGBA = (0.08, 0.08, 0.08, 1.0)
 DEBRIS_TILT_DEG = 10.0  # §7.1 "slightly rotated"
+CAM_ZNEAR_M = 0.02  # absolute camera clip planes (metres)
+CAM_ZFAR_M = 120.0
 FLICKER = 0.25  # +-fraction of fire colour per tick
 
 
@@ -75,6 +77,10 @@ class World:
         self.model = mujoco.MjModel.from_xml_string(xml)
         self.data = mujoco.MjData(self.model)
         m = self.model
+        # Camera clip planes are relative to the model extent, which the z=-50 mocap pool and the floor
+        # inflate to ~70 m: the default near plane was 0.7 m, so drone cameras saw THROUGH nearby walls.
+        m.vis.map.znear = CAM_ZNEAR_M / m.stat.extent
+        m.vis.map.zfar = CAM_ZFAR_M / m.stat.extent
 
         def jnt(name):
             j = m.joint(name)
