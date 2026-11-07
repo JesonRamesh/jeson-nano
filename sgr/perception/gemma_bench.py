@@ -268,22 +268,11 @@ def unload_all(client, host: str) -> None:
         pass
 
 
-def size_vram_mib(client, host: str, tag: str) -> int | None:
-    try:
-        for m in client.get(f"{host}/api/ps", timeout=10).json().get("models", []):
-            if m.get("name") == tag or m.get("model") == tag:
-                return round(m.get("size_vram", 0) / 2**20)
-    except Exception:
-        pass
-    return None
-
-
 @dataclass
 class TagResult:
     tag: str
     vram_before: tuple[int, int] | None = None
     vram_after: tuple[int, int] | None = None
-    size_vram: int | None = None
     cold: Call | None = None
     calls: dict[str, list[Call]] = field(default_factory=dict)  # image key -> calls
 
@@ -306,7 +295,6 @@ def bench_tag(client, host, tag, images: dict[str, np.ndarray], runs: int, timeo
             status = f"{c.wall_s:.2f}s" if c.ok else f"FAIL {c.error}"
             print(f"[{tag}] {key} run {i + 1}/{runs}: {status}", flush=True)
     res.vram_after = vram_mib()
-    res.size_vram = size_vram_mib(client, host, tag)
     unload_all(client, host)
     return res
 
@@ -333,11 +321,12 @@ def fmt_vram(v) -> str:
 
 def summarise(r: TagResult) -> dict:
     lat = [c.wall_s for cs in r.calls.values() for c in cs if c.ok]
-    n_correct = sum(correct(cs[0].answer, target_of(k)) for k, cs in r.calls.items() if cs and cs[0].ok)
+    runs = [(c, target_of(k)) for k, cs in r.calls.items() for c in cs]
+    n_correct = sum(correct(c.answer, t) for c, t in runs if c.ok)
     toks = [c.eval_count / c.eval_s for cs in r.calls.values() for c in cs if c.ok and c.eval_s > 0]
     return {
         "p50": pct(lat, 50), "p95": pct(lat, 95), "n_ok": len(lat),
-        "n_correct": n_correct, "n_images": len(r.calls),
+        "n_correct": n_correct, "n_runs": len(runs),
         "tok_s": float(np.mean(toks)) if toks else float("nan"),
         "headroom": (r.vram_after[1] - r.vram_after[0]) if r.vram_after else None,
     }
@@ -358,8 +347,8 @@ def write_report(path: Path, shots: list[Shot], results: list[TagResult], args, 
     L.append("")
 
     L.append("## Summary\n")
-    L.append("| Tag | VRAM before (MiB) | VRAM after (MiB) | Δ | Ollama size_vram | Cold load (s) | p50 (s) | p95 (s) | tok/s | Correct | Headroom (MiB) |")
-    L.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    L.append("| Tag | VRAM before (MiB) | VRAM after (MiB) | Δ (MiB) | Cold load (s) | p50 (s) | p95 (s) | tok/s | Correct runs | Headroom (MiB) |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|")
     sums = {}
     for r in results:
         s = sums[r.tag] = summarise(r)
@@ -367,8 +356,8 @@ def write_report(path: Path, shots: list[Shot], results: list[TagResult], args, 
         cold = f"{r.cold.load_s:.1f} (wall {r.cold.wall_s:.1f})" if r.cold and r.cold.ok else f"FAIL: {r.cold.error if r.cold else '-'}"
         L.append(
             f"| `{r.tag}` | {fmt_vram(r.vram_before)} | {fmt_vram(r.vram_after)} | {delta if delta is not None else 'n/a'} | "
-            f"{r.size_vram if r.size_vram is not None else 'n/a'} | {cold} | {s['p50']:.2f} | {s['p95']:.2f} | "
-            f"{s['tok_s']:.1f} | {s['n_correct']}/{s['n_images']} | {s['headroom'] if s['headroom'] is not None else 'n/a'} |"
+            f"{cold} | {s['p50']:.2f} | {s['p95']:.2f} | "
+            f"{s['tok_s']:.1f} | {s['n_correct']}/{s['n_runs']} | {s['headroom'] if s['headroom'] is not None else 'n/a'} |"
         )
     L.append("")
 
@@ -377,7 +366,7 @@ def write_report(path: Path, shots: list[Shot], results: list[TagResult], args, 
         best = max(ok, key=lambda r: (sums[r.tag]["n_correct"], -sums[r.tag]["p95"]))
         s = sums[best.tag]
         L.append(
-            f"**Suggested:** `{best.tag}`: {s['n_correct']}/{s['n_images']} correct, p95 {s['p95']:.2f} s. "
+            f"**Suggested:** `{best.tag}`: {s['n_correct']}/{s['n_runs']} runs correct, p95 {s['p95']:.2f} s. "
             "This is the most correct answers, then the lowest p95. The pick is yours; check the VRAM headroom (the renderer needs some too).\n"
         )
 
