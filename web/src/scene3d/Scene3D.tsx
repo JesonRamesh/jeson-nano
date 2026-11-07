@@ -8,7 +8,7 @@ import { placeClick, undoClick, type ClickMode } from '../dashboard/clickTool'
 import { useFreeGrid, type FreeGrid } from '../state/grid'
 import { sim, useSim, type SimEventMsg } from '../state/store'
 import { DEBRIS_SIZE } from './constants'
-import { Dressing } from './dressing'
+import { Dressing, FirefighterFigure, SurvivorFigure } from './dressing'
 import { mergeWalls } from './walls'
 
 // Everything inside <SimFrame> uses sim coordinates (metres, z up, x east, y north).
@@ -397,19 +397,55 @@ function Routes() {
 }
 
 function SurvivorMarker() {
+  // W's low-poly survivor figure (a hi-vis capsule while it loads). The belief has no
+  // heading, so it lies along x. Faded until the swarm has confirmed it.
   const s = useSim((st) => st.state?.survivor)
   if (!s || s.x == null || s.y == null || s.status === 'unknown') return null
+  const opacity = s.status === 'confirmed' ? 1 : 0.6
   return (
-    <mesh position={[s.x, s.y, 0.2]}>
-      <capsuleGeometry args={[0.18, 1.2, 6, 12]} />
-      <meshStandardMaterial
-        color="#d4ff3d"
-        emissive="#9ccc00"
-        emissiveIntensity={s.status === 'confirmed' ? 0.8 : 0.3}
-        transparent
-        opacity={s.status === 'confirmed' ? 1 : 0.6}
-      />
-    </mesh>
+    <Suspense
+      fallback={
+        <mesh position={[s.x, s.y, 0.2]}>
+          <capsuleGeometry args={[0.18, 1.2, 6, 12]} />
+          <meshStandardMaterial
+            color="#d4ff3d"
+            emissive="#9ccc00"
+            emissiveIntensity={s.status === 'confirmed' ? 0.8 : 0.3}
+            transparent
+            opacity={opacity}
+          />
+        </mesh>
+      }
+    >
+      <SurvivorFigure x={s.x} y={s.y} opacity={opacity} />
+    </Suspense>
+  )
+}
+
+/** Act 2: the firefighter, from state.ff. Walks (bob + sway) while moving faster than 0.2 m/s. */
+function FirefighterMarker() {
+  const ff = useSim((st) => st.state?.ff)
+  const last = useRef<{ x: number; y: number; t: number } | null>(null)
+  const [moving, setMoving] = useState(false)
+  useEffect(() => {
+    if (!ff) {
+      last.current = null
+      return
+    }
+    const now = performance.now() / 1000
+    const prev = last.current
+    last.current = { x: ff.x, y: ff.y, t: now }
+    if (!prev || now - prev.t <= 0) return
+    const speed = Math.hypot(ff.x - prev.x, ff.y - prev.y) / (now - prev.t)
+    const m = speed > 0.2
+    const id = setTimeout(() => setMoving(m), 0)
+    return () => clearTimeout(id)
+  }, [ff])
+  if (!ff) return null
+  return (
+    <Suspense fallback={null}>
+      <FirefighterFigure x={ff.x} y={ff.y} yaw={ff.yaw} moving={moving} />
+    </Suspense>
   )
 }
 
@@ -654,6 +690,7 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
           <Routes />
           <ClickObjects />
           <SurvivorMarker />
+          <FirefighterMarker />
           <Drones />
           <Dressing />
         </SimFrame>
