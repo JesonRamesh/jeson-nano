@@ -165,3 +165,41 @@ export function rng(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 }
+
+/**
+ * Sticky rubble. The swarm keeps re-checking debris with LiDAR, so blocked_new cells at the
+ * edges flicker (cleared, re-marked). Rebuilding piles from scratch made them jump, vanish
+ * and change shape. Instead: a pile, once placed, keeps its position and shape (seed from
+ * its quantised position); new piles only cover cells away from existing ones; a pile is
+ * dropped only after no blocked cell has been near it for `holdS` seconds (judge Undo).
+ * Returns the same array object when nothing changed (cheap React updates).
+ */
+export class RubbleTracker {
+  piles: (DebrisBlock & { seen: number })[] = []
+  holdS: number
+  near: number
+  constructor(holdS = 3, near = 1.0) {
+    this.holdS = holdS
+    this.near = near
+  }
+
+  update(b: BeliefGrid, t: number): DebrisBlock[] | null {
+    const { w, cells, res } = b
+    const pts: [number, number][] = []
+    for (let k = 0; k < cells.length; k++)
+      if (cells[k] === CELL_CODE.blocked_new) pts.push([((k % w) + 0.5) * res, (Math.floor(k / w) + 0.5) * res])
+    let changed = false
+    for (const p of this.piles) if (pts.some(([x, y]) => Math.hypot(x - p.x, y - p.y) < this.near)) p.seen = t
+    const kept = this.piles.filter((p) => t - p.seen <= this.holdS)
+    if (kept.length !== this.piles.length) changed = true
+    // new spots only for cells not already covered by a pile
+    const fresh = beliefDebris(b).filter((s) => !kept.some((p) => Math.hypot(p.x - s.x, p.y - s.y) < this.near))
+    for (const s of fresh) {
+      if (kept.some((p) => Math.hypot(p.x - s.x, p.y - s.y) < this.near)) continue
+      kept.push({ ...s, seed: Math.round(s.x * 10) * 7919 + Math.round(s.y * 10) * 104729, seen: t })
+      changed = true
+    }
+    this.piles = kept
+    return changed ? kept.map(({ seen: _seen, ...p }) => p) : null
+  }
+}

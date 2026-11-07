@@ -79,7 +79,7 @@ export function Atmosphere({
   // the scene. Restore the previous fog on unmount.
   useEffect(() => {
     const prev = scene.fog
-    fogRef.current = fog > 0 ? new THREE.FogExp2('#3a312b', fog) : null // smoky grey-brown
+    fogRef.current = fog > 0 ? new THREE.FogExp2('#2e2620', fog) : null // smoky brown-black
     // oxlint-disable-next-line react/immutability -- three.js scene objects are mutable by design
     scene.fog = fogRef.current
     return () => {
@@ -90,7 +90,11 @@ export function Atmosphere({
   // Thick smoke at drone/chase height, thin from the overview camera (~40 m up), so the
   // whole building stays readable from above. three.js y = sim z (height).
   useFrame(({ camera }) => {
-    if (fogRef.current) fogRef.current.density = fog * Math.min(1, 6 / Math.max(6, camera.position.y))
+    // walking / drone height (< 3 m): extra depth haze so corridors fade into smoke ahead;
+    // from higher up it falls back to `fog`, and thins out for the overview.
+    const y = camera.position.y
+    const walk = 1 + 1.4 * Math.min(1, Math.max(0, (3.5 - y) / 1.5)) // 2.4x at walking height
+    if (fogRef.current) fogRef.current.density = fog * walk * Math.min(1, 6 / Math.max(6, y))
   })
   const spots = useMemo(() => spread(nodes, beacons), [nodes, beacons])
   return (

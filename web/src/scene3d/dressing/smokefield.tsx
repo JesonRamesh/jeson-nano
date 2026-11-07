@@ -59,8 +59,8 @@ const FRAG = /* glsl */ `
 export function SmokeField({
   grid,
   fires,
-  ambient = 0.3,
-  opacity = 0.42,
+  ambient = 0.36,
+  opacity = 0.44,
 }: {
   grid: FreeGrid
   fires: Fire[]

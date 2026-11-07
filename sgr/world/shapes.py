@@ -11,6 +11,7 @@ visuals, 2 = drones + firefighter, 3 = hidden.
 from __future__ import annotations
 
 import math
+import os
 
 from sgr import config
 
@@ -101,8 +102,49 @@ def visual_settings() -> str:
     )
 
 
+# Flame look: tapered flame tongues (white-yellow core -> orange -> red tips), a glowing ember bed and a
+# dark smoke plume. Against the photoreal scan replica gemma4:e4b read the cartoon cones as "safety
+# cones" / "yellow markers" (6/24 views called fire), so the fire has to look like fire.
+# (x, y, z_centre, rx, ry, rz, colour) per tongue, in the cluster frame (metres)
+_FLAME_TONGUES = (
+    (0.00, 0.00, 0.55, 0.16, 0.16, 0.55, (1.0, 0.92, 0.55, 1.0)),   # white-yellow core
+    (0.18, 0.08, 0.42, 0.13, 0.13, 0.42, (1.0, 0.72, 0.15, 1.0)),
+    (-0.15, 0.12, 0.38, 0.12, 0.12, 0.38, (1.0, 0.55, 0.05, 1.0)),
+    (0.05, -0.18, 0.45, 0.13, 0.12, 0.45, (1.0, 0.62, 0.08, 1.0)),
+    (-0.12, -0.12, 0.30, 0.11, 0.11, 0.30, (0.98, 0.38, 0.03, 1.0)),
+    (0.25, -0.10, 0.28, 0.10, 0.10, 0.28, (0.95, 0.30, 0.02, 1.0)),
+    (-0.25, 0.00, 0.25, 0.10, 0.10, 0.25, (0.92, 0.25, 0.02, 1.0)),
+    (0.02, 0.02, 1.10, 0.09, 0.09, 0.30, (1.0, 0.50, 0.04, 1.0)),    # licking tip
+    (0.12, -0.04, 0.95, 0.07, 0.07, 0.22, (0.95, 0.28, 0.02, 1.0)),
+    (-0.10, 0.06, 0.88, 0.07, 0.07, 0.20, (0.95, 0.30, 0.02, 1.0)),
+)
+_SMOKE = ((0.0, 0.0, 1.75, 0.45, 0.45, 0.30), (0.15, 0.10, 2.20, 0.55, 0.50, 0.28), (-0.12, -0.05, 2.45, 0.45, 0.45, 0.15))
+FIRE_LOOK = os.environ.get("SGR_FIRE_LOOK", "flames").lower()  # "flames" | "cones" (the old look)
+
+
+def _flame_geoms(prefix: str) -> str:
+    s = FIRE_SCALE * 0.9
+    out = [
+        f'<geom name="{prefix}_embers" type="cylinder" size="{0.55 * s:.3f} 0.01" pos="0 0 0.01" '
+        f'material="mat_fire" rgba="0.85 0.22 0.02 1" group="1" {_VIS}/>'
+    ]
+    for i, (x, y, z, rx, ry, rz, c) in enumerate(_FLAME_TONGUES):
+        out.append(
+            f'<geom name="{prefix}_c{i}" type="ellipsoid" size="{rx * s:.3f} {ry * s:.3f} {rz * s:.3f}" '
+            f'pos="{x * s:.3f} {y * s:.3f} {z * s:.3f}" material="mat_fire" rgba="{rgba(c)}" group="1" {_VIS}/>'
+        )
+    for i, (x, y, z, rx, ry, rz) in enumerate(_SMOKE):
+        out.append(
+            f'<geom name="{prefix}_smoke{i}" type="ellipsoid" size="{rx * s:.3f} {ry * s:.3f} {rz * s:.3f}" '
+            f'pos="{x * s:.3f} {y * s:.3f} {z * s:.3f}" material="mat_matte" rgba="0.16 0.15 0.15 0.72" group="1" {_VIS}/>'
+        )
+    return "\n".join(out)
+
+
 def fire_cluster_geoms(prefix: str) -> str:
-    """Geoms of one fire cluster (3-5 emissive cones). Put them inside a body at floor level."""
+    """Geoms of one fire cluster. Put them inside a body at floor level."""
+    if FIRE_LOOK != "cones":
+        return _flame_geoms(prefix)
     out = []
     for i, (mesh, x, y, ci) in enumerate(_FIRE_LAYOUT):
         out.append(

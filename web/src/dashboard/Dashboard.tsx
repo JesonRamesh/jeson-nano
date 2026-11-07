@@ -41,12 +41,6 @@ function isTyping(e: KeyboardEvent) {
   return e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement
 }
 
-function fmtClock(t: number) {
-  const m = Math.floor(t / 60)
-  const s = t - m * 60
-  return `${String(m).padStart(2, '0')}:${s.toFixed(1).padStart(4, '0')}`
-}
-
 /**
  * Smooth re-layout (FLIP): remember every tile's box before the layout changes, then after
  * React re-renders, start each tile from its old box and let it glide to the new one.
@@ -155,6 +149,18 @@ function Tile({
   )
 }
 
+/** Four corner brackets; pointing out = enter full screen, pointing in = exit. */
+function FullscreenIcon({ exit }: { exit: boolean }) {
+  const d = exit
+    ? 'M7 2v5H2M13 2v5h5M7 18v-5H2M13 18v-5h5'
+    : 'M2 7V2h5M18 7V2h-5M2 13v5h5M18 13v5h-5'
+  return (
+    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="square">
+      <path d={d} />
+    </svg>
+  )
+}
+
 /** Act 1 layout (§10.1, adapted): 3D map + 4 drone feeds in one stage, short trace below. */
 export default function Dashboard() {
   const panels = useRef<(DronePanelHandle | null)[]>([])
@@ -203,55 +209,8 @@ export default function Dashboard() {
     <div className="dash">
       <Toasts />
       <Banners />
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden>
-            <i />
-            <i />
-            <i />
-            <i />
-          </span>
-          <span className="brand-name">Swarm-Guided Rescue</span>
-        </div>
-        <div className="telemetry">
-          <span className={`tm tm-link tm-${status}`}>
-            <b>Link</b>
-            <span className="led" />
-            {status}
-          </span>
-          <span className="tm">
-            <b>Map</b>
-            {hello ? hello.map.name : '...'}
-          </span>
-          <span className="tm">
-            <b>T+</b>
-            {state ? fmtClock(state.t) : '--:--.-'}
-          </span>
-          <span className="tm">
-            <b>Speed</b>
-            {state ? `${state.speed}×` : '-'}
-          </span>
-          <span className="tm">
-            <b>Act</b>
-            {state?.act ?? '-'}
-          </span>
-          <span className="tm">
-            <b>Phase</b>
-            {state?.phase || '-'}
-          </span>
-          {versionMismatch && <span className="tm tm-bad">contract mismatch: server v{hello?.contract_version}</span>}
-        </div>
-        <div className="top-actions">
-          {focus !== null && (
-            <button className="btn" onClick={() => setFocus(null)} title="Back to all views (Esc)">
-              ▦ All views
-            </button>
-          )}
-          <button className="btn" onClick={fullscreen.toggle} title="Full screen (F)">
-            {fullscreen.on ? 'Exit full screen' : 'Full screen'}
-          </button>
-        </div>
-      </header>
+      {status !== 'connected' && <div className="link-pill">{status === 'connecting' ? 'Connecting to sim' : 'Sim link lost, reconnecting'}</div>}
+      {versionMismatch && <div className="link-pill bad">Contract mismatch: server v{hello?.contract_version}</div>}
 
       <main className={`stage ${focus === null ? 'stage-grid' : 'stage-focus'}`}>
         <Tile {...tileProps(MAP_TILE, 0, '3D map')}>
@@ -272,7 +231,18 @@ export default function Dashboard() {
           </Tile>
         ))}
       </main>
-      <TracePanel />
+      <TracePanel
+        actions={
+          <button
+            className="icon-btn"
+            onClick={fullscreen.toggle}
+            title={fullscreen.on ? 'Exit full screen (F)' : 'Full screen (F)'}
+            aria-label={fullscreen.on ? 'Exit full screen' : 'Full screen'}
+          >
+            <FullscreenIcon exit={fullscreen.on} />
+          </button>
+        }
+      />
     </div>
   )
 }
