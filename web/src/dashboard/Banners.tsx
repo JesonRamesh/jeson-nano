@@ -2,38 +2,38 @@ import { useEffect, useState } from 'react'
 import { useSim, type SimEvent, type SimEventMsg } from '../state/store'
 
 const SHOW_MS = 4500
-const MAX_SHOWN = 2
+const MAX_SHOWN = 3
 
 type Tone = 'danger' | 'warn' | 'good'
 
-/** Banner text for each event kind (spec §10.1 "Banners for key events"). */
+/** Short notice for each event kind (spec §10.1 "banners for key events", kept small). */
 function bannerFor(e: SimEventMsg): { text: string; tone: Tone } {
-  const who = e.drone ? `: ${e.drone}` : ''
+  const d = e.drone ?? ''
   switch (e.kind) {
     case 'fire_confirmed':
-      return { text: `FIRE CONFIRMED${who}`, tone: 'danger' }
+      return { text: `Fire confirmed${d && ` by ${d}`}`, tone: 'danger' }
     case 'false_alarm':
-      return { text: `FALSE ALARM CORRECTED${who}`, tone: 'good' }
+      return { text: `False alarm corrected${d && ` (${d})`}`, tone: 'good' }
     case 'drone_lost':
-      return { text: `${e.drone ?? 'DRONE'} SIGNAL LOST`, tone: 'danger' }
+      return { text: `${d || 'Drone'} lost`, tone: 'danger' }
     case 'blocked':
-      return { text: 'ROUTE BLOCKED, RE-PLANNING', tone: 'warn' }
+      return { text: 'Route blocked, replanning', tone: 'warn' }
     case 'replan':
-      return { text: 'NEW ROUTE', tone: 'good' }
+      return { text: 'New route', tone: 'good' }
     case 'survivor_found':
-      return { text: 'SURVIVOR FOUND', tone: 'good' }
+      return { text: 'Survivor found', tone: 'good' }
     case 'chain_formed':
-      return { text: 'CHECKPOINT CHAIN FORMED', tone: 'good' }
+      return { text: 'Relay chain formed', tone: 'good' }
     case 'no_route':
-      return { text: 'NO SAFE ROUTE, HOLDING', tone: 'danger' }
+      return { text: 'No safe route, holding', tone: 'danger' }
     case 'mission_complete':
-      return { text: 'MISSION COMPLETE', tone: 'good' }
+      return { text: 'Mission complete', tone: 'good' }
     case 'survivor_check':
-      return { text: `POSSIBLE SURVIVOR: ${e.drone ?? 'DRONE'} TAKING A CLOSER LOOK`, tone: 'warn' }
+      return { text: `Possible survivor, ${d || 'drone'} taking a closer look`, tone: 'warn' }
   }
 }
 
-/** Big banners for the latest events; each stays for 4.5 s. */
+/** Small notices for the latest events (top right, newest first); each stays 4.5 s. */
 export function Banners() {
   const events = useSim((s) => s.events)
   const [now, setNow] = useState(() => performance.now())

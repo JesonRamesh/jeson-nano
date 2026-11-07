@@ -81,16 +81,21 @@ h2 {
   gap: 12px;
   padding: 12px 12px 0;
 }
+.stage {
+  padding: 12px;
+}
+/* default: 3D map | 2x2 feeds on top; decision log | swarm links underneath (half each) */
 .stage-grid {
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) 176px;
   grid-template-areas:
-    't0 t1 t2'
-    't0 t3 t4';
+    't0 t0 t1 t1 t2 t2'
+    't0 t0 t3 t3 t4 t4'
+    't5 t5 t5 t6 t6 t6';
 }
 .stage-focus {
-  grid-template-columns: minmax(0, 1fr) 320px;
-  grid-template-rows: repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-rows: repeat(6, minmax(0, 1fr));
 }
 
 .tile {
@@ -673,3 +678,202 @@ h2 {
 /* focused feed: keep the top-right corner for the temperature readout */
 .tile-feed .tile-back { left: 50%; right: auto; transform: translateX(-50%); }
 .tile-hint { top: 58px; }
+
+/* ================================================================== calm pass
+   One accent (amber) + one alert colour (red), everything else in greys. */
+
+/* feed overlays: monochrome text, no coloured status */
+.feed-status { color: var(--dim); letter-spacing: 0.04em; text-transform: none; font: 400 12px/1 var(--mono); }
+.feed-status::before { content: none; }
+.feed-id::before { width: 6px; height: 6px; border-radius: 50%; box-shadow: none; opacity: 0.9; }
+.det-tag {
+  border: 0;
+  padding: 0;
+  color: var(--dim);
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font: 400 12px/1 var(--mono);
+}
+.det-tag::after { content: ' ·'; color: var(--faint); }
+.det-caption { color: var(--text); font-size: 13px; }
+.det-conf { color: var(--faint); }
+.feed-temp { font-size: 14px; }
+.feed-temp.hot { color: var(--bad); border-color: rgba(255, 90, 78, 0.5); animation: none; }
+
+/* detection boxes: thin white frames */
+.bbox,
+.bbox-person { border: 1px solid rgba(238, 241, 244, 0.9); border-radius: 2px; }
+.bbox span,
+.bbox-person span {
+  top: -18px;
+  left: -1px;
+  background: rgba(8, 10, 13, 0.6);
+  color: var(--text);
+  border-radius: 3px;
+  text-transform: none;
+  font: 400 10px/1.3 var(--mono);
+  backdrop-filter: blur(6px);
+}
+
+/* lost drone: last frame greyed out, a quiet label */
+.feed.lost .cam-box img { filter: grayscale(1) brightness(0.45); }
+.signal-lost { background: rgba(5, 6, 7, 0.35); animation: none; }
+.signal-lost span {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  padding: 7px 14px;
+  color: var(--dim);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font: 500 11px/1 var(--mono);
+  background: rgba(8, 10, 13, 0.4);
+  backdrop-filter: blur(10px);
+}
+.feed.lost .feed-id { color: var(--faint); }
+
+/* hover hint: smaller, neutral */
+.tile-hint {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(8, 10, 13, 0.5);
+  backdrop-filter: blur(10px);
+  text-transform: none;
+  letter-spacing: 0.04em;
+  font: 400 11px/1 var(--mono);
+}
+.tile:hover .corner,
+.tile-focused .corner { border-color: rgba(255, 255, 255, 0.35); }
+.tile-grid:hover .tile-inner,
+.tile-rail:hover .tile-inner {
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 22px 50px rgba(0, 0, 0, 0.6);
+}
+.tile-focused .tile-inner { border-color: rgba(255, 255, 255, 0.16); }
+.tile-back {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.18);
+  text-transform: none;
+  letter-spacing: 0.04em;
+}
+.view-buttons button { text-transform: none; letter-spacing: 0.04em; font-size: 12px; }
+.view-buttons button.active { color: var(--text); border-color: rgba(255, 255, 255, 0.35); box-shadow: inset 0 -2px 0 var(--accent); }
+
+/* ------------------------------------------------------------------ log tile */
+.tile-log .tile-inner,
+.tile-net .tile-inner { cursor: zoom-in; }
+.trace-panel,
+.trace-panel.compact,
+.trace-panel.detailed {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  display: flex;
+  flex-direction: column;
+}
+.trace-head { padding: 12px 14px 8px; border: 0; gap: 10px; }
+.trace-count { color: var(--faint); font: 400 11px/1 var(--mono); }
+.trace-panel ul { flex: 1; min-height: 0; overflow: hidden; padding: 0 6px 8px; font-size: 13px; }
+.trace-panel.detailed ul { overflow-y: auto; max-height: none; }
+.trace-row { border: 0; padding: 5px 8px; border-radius: 6px; cursor: default; }
+.trace-panel.detailed .trace-row { cursor: pointer; padding: 7px 10px; }
+.trace-row:hover,
+.trace-row.open { background: none; }
+.trace-panel.detailed .trace-row:hover,
+.trace-panel.detailed .trace-row.open { background: rgba(255, 255, 255, 0.05); }
+.trace-line { gap: 12px; align-items: baseline; }
+.trace-t { width: 44px; font: 400 11px/1 var(--mono); color: var(--faint); text-align: right; }
+.trace-drone { width: 40px; font: 500 12px/1 var(--mono); color: var(--text); }
+.trace-action { width: 150px; flex: none; font: 400 11px/1 var(--mono); color: var(--dim); }
+.trace-reason { color: var(--text); opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trace-panel.detailed .trace-reason { white-space: normal; font-size: 14px; }
+.trace-row.alert .trace-drone,
+.trace-row.alert .trace-action { color: var(--bad); }
+.evidence-hint { border-radius: 4px; text-transform: lowercase; color: var(--faint); border-color: rgba(255, 255, 255, 0.12); }
+.trace-evidence { padding: 8px 0 4px 108px; color: var(--dim); }
+.evidence-frame { border-radius: 6px; overflow: hidden; border-color: rgba(255, 255, 255, 0.12); }
+.trace-actions { margin-left: auto; }
+.tile-rail .trace-head { padding: 8px 10px 4px; }
+.tile-rail .trace-panel ul { font-size: 11px; }
+.tile-rail .trace-t { display: none; }
+
+/* ------------------------------------------------------------------ links tile */
+.netgraph { position: absolute; inset: 0; }
+.netgraph canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.netgraph.detailed { cursor: grab; }
+.netgraph.detailed:active { cursor: grabbing; }
+.netgraph-head {
+  position: absolute;
+  left: 14px;
+  right: 12px;
+  top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+}
+.netgraph-info { font: 400 11px/1 var(--mono); color: var(--faint); }
+.netgraph-actions { margin-left: auto; pointer-events: auto; }
+.netgraph-hint {
+  position: absolute;
+  right: 14px;
+  top: 46px;
+  font: 400 11px/1 var(--mono);
+  color: var(--faint);
+}
+.tile-rail .netgraph-head { left: 10px; top: 8px; }
+.tile-rail .netgraph-info,
+.tile-rail .netgraph-actions { display: none; }
+
+/* ------------------------------------------------------------------ event notices
+   small, top right of the screen, newest first, out of the way */
+.banners {
+  top: 18px;
+  right: 18px;
+  left: auto;
+  transform: none;
+  align-items: flex-end;
+  gap: 6px;
+}
+.banner,
+.banner + .banner {
+  padding: 8px 12px 8px 26px;
+  font: 400 12px/1.2 var(--sans);
+  letter-spacing: 0.01em;
+  color: var(--text);
+  opacity: 1;
+  border-radius: 8px;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(10, 12, 15, 0.5);
+  animation: notice-in 0.28s var(--ease);
+}
+.banner + .banner { opacity: 0.75; }
+.banner::before {
+  top: 50%;
+  bottom: auto;
+  left: 11px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: var(--dim);
+}
+.banner-danger::before { background: var(--bad); }
+.banner-warn::before { background: var(--accent); }
+.banner-good::before { background: var(--ok); }
+.banner-danger,
+.banner-warn,
+.banner-good { color: var(--text); border-color: rgba(255, 255, 255, 0.12); }
+@keyframes notice-in {
+  from { transform: translateX(12px); opacity: 0; }
+}
+/* focused log / links: keep the corners free (fullscreen icon, scale bar, north arrow) */
+.tile-log .tile-back,
+.tile-net .tile-back { top: 10px; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
