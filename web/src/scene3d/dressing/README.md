@@ -86,3 +86,27 @@ import { Dressing } from './dressing'
   the overview camera.
 - **Preview without the sim:** `npm run dev` + `uv run python -m sgr.server.dev --map maps/<name>`, then
   open `/src/scene3d/dressing/preview.html?map=<name>&view=overview|fire|rubble|corridor|hall`.
+
+## People: `firefighter.glb`, `survivor.glb` + `<FirefighterFigure>`, `<SurvivorFigure>`
+
+Realistic but cheap, for the 3D view only. Procedural low-poly figures from
+`tools/scan_make_people.py` (CC0, our own): adult proportions (1.78 m), no textures, no
+skeleton, parts merged per colour.
+
+| | triangles | draw calls | size |
+|---|---|---|---|
+| firefighter (navy turnout gear + hi-vis bands, yellow helmet, mask, air cylinder) | 7.5k | 9 | 144 kB |
+| survivor (lying on the back, hi-vis yellow-green jacket, jeans) | 4.6k | 5 | 88 kB |
+
+Each has a soft contact shadow; the survivor breathes slightly, and the firefighter bobs when
+`moving`. Axes are glTF y-up with +X forward; the components already convert to the sim frame.
+
+**Swap-in (D, in `Scene3D.tsx`, inside `<SimFrame>`; wrap in `<Suspense>`):**
+```tsx
+import { FirefighterFigure, SurvivorFigure } from './dressing'
+// SurvivorMarker: same props as SimSurvivor
+<SurvivorFigure x={s.x} y={s.y} opacity={s.status === 'confirmed' ? 1 : 0.6} />
+// Act 2 firefighter (state.ff = {x, y, yaw}); moving = speed > ~0.2 m/s
+{ff && <FirefighterFigure x={ff.x} y={ff.y} yaw={ff.yaw} moving={moving} />}
+```
+The drone cameras (MuJoCo, P) keep their simple shapes: the detector is tuned on them.

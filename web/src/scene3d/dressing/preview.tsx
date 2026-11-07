@@ -10,6 +10,7 @@ import { createRoot } from 'react-dom/client'
 import * as THREE from 'three'
 import type { Scenario, Transform } from '../../contracts'
 import { Dressing } from './index'
+import { FirefighterFigure, SurvivorFigure } from './people'
 
 const q = new URLSearchParams(location.search)
 const MAP = q.get('map') ?? 'marshgate-route'
@@ -23,6 +24,7 @@ const VIEWS: Record<string, [number[], number[]]> = {
   corridor: [[5.4, 6.5, 1.7], [5.4, 20, 1.3]],
   hall: [[19.0, 33.5, 1.9], [27.5, 32.0, 0.8]],
   fires: [[22.0, 36.0, 3.2], [26.5, 30.8, 0.6]],
+  people: [[37.5, 46.5, 2.7], [35.4, 45.4, 0.3]],
 }
 const toThree = (p: number[]) => new THREE.Vector3(p[0], p[2], -p[1])
 
@@ -76,6 +78,11 @@ function App() {
           <Scan transform={tf} />
         </Suspense>
         <Dressing mapName={MAP} size={size} nodes={sc.graph.nodes} gridUrl={`/maps/${MAP}/grid.png`} reveal="world" />
+        <Suspense fallback={null}>
+          <SurvivorFigure x={sc.survivor.x} y={sc.survivor.y} yaw={sc.survivor.yaw ?? 0} />
+          {/* a firefighter arriving at the survivor (preview only) */}
+          <FirefighterFigure x={sc.survivor.x - 1.6} y={sc.survivor.y - 0.3} yaw={0.15} moving />
+        </Suspense>
       </group>
       <OrbitControls target={toThree(target)} makeDefault />
     </Canvas>
