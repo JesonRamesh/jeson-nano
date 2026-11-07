@@ -1,4 +1,4 @@
-import { Line, OrbitControls, useGLTF } from '@react-three/drei'
+import { Line, OrbitControls, Stars, useGLTF } from '@react-three/drei'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Component, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
@@ -670,6 +670,9 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
   }, [send])
   const drones = useSim((s) => s.hello?.drones ?? NO_DRONES)
   const hasScan = useSim((s) => !!s.hello?.transform)
+  const mapCentre: [number, number, number] = hello
+    ? [(hello.map.size[0] * hello.map.resolution) / 2, 0, -(hello.map.size[1] * hello.map.resolution) / 2]
+    : [0, 0, 0]
   return (
     <div className={`scene3d ${clickMode ? 'click-mode' : ''}`}>
       {/* frameloop="demand" + FrameCap: ~30 fps max, so the 3D view leaves GPU time for Gemma. */}
@@ -683,6 +686,11 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
       >
         <FrameCap fps={MAX_FPS} />
         <color attach="background" args={['#07090b']} />
+        {/* Starfield behind the building (white points, gently twinkling). Centred on the map; its shader
+            ignores the dressing's fog, so it stays visible through the smoke. */}
+        <group position={mapCentre}>
+          <Stars radius={90} depth={60} count={5000} factor={4} saturation={0} fade speed={0.5} />
+        </group>
         <hemisphereLight args={['#c8d2e0', '#202020', 0.9]} />
         <directionalLight position={[10, 30, 10]} intensity={0.8} />
         <SimFrame>
