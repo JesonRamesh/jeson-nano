@@ -1,1 +1,1 @@
-"""Web server: WebSocket /ws, REST /api/*, static web/dist (owned by D)."""
+"""Server (owned by D): FastAPI + WS /ws. Talks to the sim loop only via sgr.bus."""
