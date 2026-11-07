@@ -254,5 +254,8 @@
     ],
     "altitude": 1.6
   },
-  "_placeholders": []
+  "_placeholders": [
+    "drones",
+    "survivor"
+  ]
 }
