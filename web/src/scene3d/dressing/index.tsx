@@ -24,6 +24,7 @@ import { SmokeField } from './smokefield'
 
 export { FireFX } from './fire'
 export { RubblePile } from './rubble'
+export { FirefighterFigure, SurvivorFigure } from './people'
 
 const MODE = typeof window === 'undefined' ? '' : new URLSearchParams(window.location.search).get('dressing') ?? ''
 const NO_NODES: GraphNode[] = []
