@@ -22,7 +22,7 @@ def test_default_demo_script_runs_end_to_end(test_map, tmp_path, capsys) -> None
     act1_click = next(s for s in script["steps"] if s["do"] == "click" and "x" in s)
     act1_click.pop("x"), act1_click.pop("y")  # the demo pins a marshgate spot; on maps/test click past the
     act1_click["on_route"] = 0.5  # once the chain is ready, the lead + sentinel patrol the route
-    act1_click["after"], act1_click["wait"] = "chain_ready", 2
+    act1_click["after"], act1_click["wait"] = "chain_ready", 3
     path = tmp_path / "demo_test_map.json"
     path.write_text(json.dumps(script), encoding="utf-8")
     code = replay.main([str(path), "--map", str(test_map), "--fake", "-q", "--snapshots", str(tmp_path)])

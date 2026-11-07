@@ -4,7 +4,9 @@
 - Cost per cell = 1 + 5·heat_norm + 3·near_wall.
 - `distance_field` is a fast Dijkstra over the same costs (exploration's nearest-target search).
 - Drone paths (`drone=True`, the default) also treat the assumed > 70 °C core around a confirmed fire
-  (belief.heat >= HOT_CORE) as impassable: a drone must never plan through heat it would retreat from.
+  (belief.heat >= HOT_CORE, > ~150 °C) as impassable. Between 70 and 150 °C a drone may cross briefly
+  (heat is a steep cost, so the crossing is as short as possible): on a one-way map the only corridor can
+  pass a fire, and a short pass is what a real drone would do (hovering there is what damages it).
   The firefighter route (`drone=False`) follows §8.3 exactly: heat is a cost, fire + 1 m is impassable.
 """
 
@@ -23,7 +25,8 @@ INFLATE_M = 0.3
 FIRE_MARGIN_M = 1.0
 NEAR_WALL_M = 0.8  # near_wall ramps 1 -> 0 between INFLATE_M and this
 SQRT2 = math.sqrt(2.0)
-HOT_CORE = 0.99  # belief.heat at / above this = assumed over the drones' 70 °C limit
+HOT_CORE = 2.6  # belief.heat at / above this (~150 °C) = never, not even crossing (70 °C = 1.0)
+NO_STAY = 0.99  # heat_norm 1 = the 70 °C limit: drones may cross above it but never stop there (goals, posts)
 SNAP_CELLS = 20  # a drone deep in a hot zone may be up to 4 m from the nearest plannable cell
 
 Point = tuple[float, float]
@@ -44,10 +47,11 @@ class CostMap:
         # an obstacle cell centre at distance d means its face is ~d - res/2 away
         self.traversable = (d_obs - res / 2 >= INFLATE_M - 1e-6) & (d_fire - res / 2 > FIRE_MARGIN_M)
         self.traversable &= ~obstacle & ~fire
+        self.obstacle = obstacle | fire  # raw (uninflated): a diagonal step may not squeeze between two of these
         if drone:
             self.traversable &= belief.heat < HOT_CORE
         near_wall = np.clip((NEAR_WALL_M - (d_obs - res / 2)) / (NEAR_WALL_M - INFLATE_M), 0.0, 1.0)
-        heat = np.clip(belief.heat, 0.0, 1.0)
+        heat = np.clip(belief.heat, 0.0, 4.0)  # heat_norm > 1 near a fire: the closer, the dearer
         self.cost = 1.0 + 5.0 * heat + 3.0 * near_wall
         self.mcp_cost = np.where(self.traversable, self.cost, np.inf)
 
@@ -87,7 +91,7 @@ def astar(belief: BeliefGrid, start: Point, goal: Point, drone: bool = True) -> 
     s, g = snap(belief, cm, *start), snap(belief, cm, *goal)
     if s is None or g is None:
         return None
-    trav, cost, w = cm.traversable, cm.cost, belief.w
+    trav, cost, w, obst = cm.traversable, cm.cost, belief.w, cm.obstacle
 
     def h(i: int, j: int) -> float:  # octile, admissible since cost >= 1
         dx, dy = abs(i - g[0]), abs(j - g[1])
@@ -111,8 +115,10 @@ def astar(belief: BeliefGrid, start: Point, goal: Point, drone: bool = True) -> 
             a, b = i + di, j + dj
             if not (0 <= a < w and 0 <= b < belief.h) or not trav[b, a]:
                 continue
-            if di and dj and not (trav[j, a] and trav[b, i]):
-                continue  # no corner cutting
+            if di and dj and obst[j, a] and obst[b, i]:
+                continue  # never squeeze diagonally between two real obstacles. Inflated cells are fine:
+                # the 0.3 m inflation already covers the drone, and debris rows LiDAR sees at an angle leave
+                # diagonal one-cell channels (the skimage distance field allows them too, so both planners agree)
             ng = gc + step * 0.5 * (cost[j, i] + cost[b, a])
             nk = b * w + a
             if ng < gbest.get(nk, math.inf):
@@ -147,6 +153,23 @@ class DistanceField:
         if self._mcp is None or not np.isfinite(self.cost[cell[1], cell[0]]):
             return None
         return [self.belief.cell_center(i, j) for j, i in self._mcp.traceback((cell[1], cell[0]))]
+
+
+def plan_path(belief: BeliefGrid, start: Point, goal: Point, drone: bool = True) -> list[Point] | None:
+    """A* to `goal`; if it can't be reached, a path to the reachable cell closest to it (never a straight
+    line through walls). None only if the start itself can't be planned from."""
+    p = astar(belief, start, goal, drone)
+    if p is not None:
+        return p
+    df = DistanceField(belief, start, drone)
+    if df.start is None:
+        return None
+    gi, gj = belief.world_to_cell(*goal)
+    jj, ii = np.nonzero(np.isfinite(df.cost))
+    if len(ii) == 0:
+        return None
+    k = int(np.argmin((ii - gi) ** 2 + (jj - gj) ** 2))
+    return df.path_to((int(ii[k]), int(jj[k])))
 
 
 def path_length(points: list[Point]) -> float:

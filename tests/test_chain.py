@@ -47,15 +47,15 @@ def _block(swarm: Swarm, x: float, y0: float, y1: float) -> list[tuple[int, int]
 def test_survivor_confirmed_plans_route_and_forms_chain(swarm: Swarm) -> None:
     _, rows, st = swarm.tick(0.0, _r(0.0), [_found()])
     acts = [r.action for r in rows]
-    assert "SURVIVOR_CONFIRMED" in acts and acts.count("CHAIN_POSITION") == 3
+    assert "SURVIVOR_CONFIRMED" in acts and acts.count("CHAIN_POSITION") == 4  # every drone joins the path
     assert st.route.status == "ok" and len(st.route.points) >= 2
     assert st.chain_formed and st.phase == "chain"
     assert any(e.kind == "chain_formed" for e in st.events)
     roles = swarm.rescue.roles
     assert roles["D1"] == "survivor"  # nearest to the survivor
     assert roles["D2"] == "lead"  # nearest to the entrance
-    assert list(roles.values()).count("sentinel") == 1 and len(roles) == 3  # 4th drone keeps exploring
-    assert st.lead == "D2" and len(st.checkpoints) == 3
+    assert list(roles.values()).count("sentinel") == 2 and len(roles) == 4  # all drones become checkpoints
+    assert st.lead == "D2" and len(st.checkpoints) == 4
     assert "REPLAN" not in acts  # the first plan is not a re-plan
 
 

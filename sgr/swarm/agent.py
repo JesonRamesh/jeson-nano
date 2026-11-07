@@ -8,6 +8,7 @@ Reflex (§8.2): 2 m separation, LiDAR wall repulsion under 0.6 m, 1.2 m/s clamp,
 from __future__ import annotations
 
 import math
+from collections import deque
 
 import numpy as np
 from scipy.ndimage import binary_dilation
@@ -17,7 +18,7 @@ from sgr.contracts import Pose, Readings, VelCmd
 
 from .areas import Area
 from .belief import BeliefGrid
-from .planner import DistanceField, astar, cost_map
+from .planner import NO_STAY, DistanceField, cost_map, plan_path
 
 # tactical
 GOAL_NEAR_CELLS = 3  # a goal is a traversable cell within 0.6 m of an unsearched cell
@@ -27,6 +28,13 @@ RETARGET_EVERY_S = 3.0
 STALL_S = 3.0
 STALL_MIN_PROGRESS = 0.3  # m of path-distance gained per STALL_S window
 SWEEP_WZ = 2.0  # rad/s
+THERMO_LEN = 40  # thermometer history: the last 4 s of (t, x, y, temp), to locate an unseen heat source
+SWEEP_EVERY_S = 15.0  # at most one 360° sweep per this many seconds ...
+SWEEP_APART_M = 3.0  # ... unless it is this far from the last one (no spinning on the spot)
+CROSS_MIN_SPEED = 0.3  # m/s: slower than this is hovering, not crossing
+SLOW_MS = 0.15  # below this speed, don't chase the travel direction (it flips around: spinning)
+SCAN_AMPL = math.radians(70)  # idle / sentinel camera scan: ±70° ...
+SCAN_RATE = 0.5  # ... at this angular frequency (rad/s), never a continuous spin
 # inspect / retreat (§8.4)
 IN_POSITION_M = 0.4
 FACING_RAD = math.radians(15)
@@ -42,8 +50,8 @@ PATROL_DIRECT_M = 2.0  # next waypoint further than this: fly there along a plan
 # reflex
 SEP_M = 2.0
 SEP_GAIN = 0.8
-WALL_M = 0.6
-WALL_GAIN = 1.5
+WALL_M = 0.45  # reflex only for real near-misses: the planner already keeps 0.3 m (a 0.6 m reflex jammed
+WALL_GAIN = 1.2  # drones at the mouth of 1 m debris gaps, both sides pushing at once)
 SMOOTH = 0.5  # EMA weight of the new command
 YAW_GAIN = 2.5
 WZ_MAX = 2.5
@@ -70,7 +78,6 @@ class Agent:
         self._stall_left = math.inf
         self._sweep_left = 0.0
         self._v = np.zeros(2)
-        self.given_up: np.ndarray | None = None  # cells this drone looked for and could not see (bool [j, i])
         # inspect: face `_focus`; if `_standoff` is set, fly there first (§8.4)
         self._focus: tuple[float, float] | None = None
         self._standoff: tuple[float, float] | None = None
@@ -88,6 +95,9 @@ class Agent:
         self._station_mode = "CHAIN"
         self._station_task = ""
         self._spath: list[tuple[float, float]] | None = None
+        self._scan_base: float | None = None
+        self._last_sweep: tuple[float, float, float] | None = None  # (t, x, y) of the last 360° sweep
+        self.thermo: deque[tuple[float, float, float, float]] = deque(maxlen=THERMO_LEN)  # (t, x, y, temp)
         # patrol: back and forth along `_patrol` (route waypoints); replaces holding the station
         self._patrol: list[tuple[float, float]] | None = None
         self._patrol_k = 0
@@ -156,6 +166,12 @@ class Agent:
         self.invalidate()
 
     @property
+    def crossing(self) -> bool:
+        """Moving along a planned path (not hovering): may pass briefly through heat between 70 and 150 °C."""
+        moving = self.mode in ("TRANSIT", "EXPLORING", "CHAIN", "WATCHING", "INSPECTING") or self._patrol is not None
+        return moving and float(np.linalg.norm(self._v)) > CROSS_MIN_SPEED
+
+    @property
     def stationed(self) -> bool:
         return self._station is not None
 
@@ -187,29 +203,23 @@ class Agent:
         return f"area {self.area}" if self.area else ""
 
     def _unsearched(self, belief: BeliefGrid, area: Area) -> np.ndarray:
-        uns = area.unsearched(belief)
-        if self.given_up is not None:
-            uns &= ~self.given_up
-        return uns
+        return area.unsearched(belief)  # dead ends any drone found are already out (belief.dead)
 
     def _give_up_goal(self, belief: BeliefGrid, area: Area) -> None:
-        """Swept / stalled at this goal and the cells near it are still unseen: stop chasing them."""
+        """Swept / stalled at this goal and the cells near it are still unseen: a dead end. Shared with the
+        whole swarm (belief.dead), so no other drone is sent to look for them either."""
         if self.goal is None:
             return
-        if self.given_up is None:
-            self.given_up = np.zeros((belief.h, belief.w), bool)
         i, j = self.goal
         r = GOAL_NEAR_CELLS
         sl = (slice(max(0, j - r), j + r + 1), slice(max(0, i - r), i + r + 1))
-        self.given_up[sl] |= area.unsearched(belief)[sl]
-
-    def forget_given_up(self) -> None:
-        """The map changed (e.g. debris cleared): cells given up on are worth another try."""
-        self.given_up = None
+        newly = area.unsearched(belief)[sl]
+        belief.dead[sl] |= newly
+        belief.dead_t[sl][newly] = belief.now
 
     def _goal_mask(self, belief: BeliefGrid, area: Area) -> np.ndarray:
         cm = cost_map(belief)
-        return binary_dilation(self._unsearched(belief, area), _STRUCT) & cm.traversable & (belief.heat < 0.99)
+        return binary_dilation(self._unsearched(belief, area), _STRUCT) & cm.traversable & (belief.heat < NO_STAY)
 
     def _plan(self, t: float, pose: Pose, belief: BeliefGrid, area: Area) -> bool:
         """Pick the nearest reachable goal near unsearched cells of the area. False = nothing left here."""
@@ -244,8 +254,10 @@ class Agent:
              others: list[Pose]) -> tuple[VelCmd, bool]:
         """One control tick. Returns (command, area_done)."""
         pose = r.pose
+        self.thermo.append((t, pose.x, pose.y, r.temperature))  # where it was, how hot it was (last few s)
         want = np.zeros(2)
         yaw_des: float | None = None
+        self._yaw_from_travel = True  # cleared below where yaw_des is a deliberate facing (target, scan)
         wz_ff = 0.0
         done = False
 
@@ -257,8 +269,11 @@ class Agent:
                     want, _ = self._follow(pose, self._retreat_path, RETREAT_SPEED)
                 else:
                     self.mode, self._retreat_path = "IDLE", None
-                    if self._station is not None:  # the post was too hot: hold here instead
-                        self._station, self._spath = (pose.x, pose.y), None
+                    if self._station is not None:
+                        si, sj = belief.world_to_cell(*self._station)
+                        if belief.inside(si, sj) and belief.heat[sj, si] >= NO_STAY:
+                            self._station = (pose.x, pose.y)  # the post itself is too hot: hold here instead
+                        self._spath = None  # otherwise back to the post (the lead must still reach the entrance)
             elif self._retreat_left > 0 and self._retreat_dir is not None:
                 want = np.array(self._retreat_dir) * RETREAT_SPEED
                 self._retreat_left -= RETREAT_SPEED * config.CONTROL_DT
@@ -275,12 +290,13 @@ class Agent:
                 close = dist < IN_POSITION_M
                 if not close:
                     if self._ipath is None:
-                        self._ipath = astar(belief, (pose.x, pose.y), self._standoff) or [self._standoff]
+                        self._ipath = plan_path(belief, (pose.x, pose.y), self._standoff) or [(pose.x, pose.y)]
                     want, travel = self._follow(pose, self._ipath, INSPECT_SPEED)
                     # face the target for the last metre so the camera is already on it
                     yaw_des = face if dist < 1.0 or travel is None else travel
             if close:
                 yaw_des = face
+                self._yaw_from_travel = False
             self.in_position = close and abs(_wrap(face - pose.yaw)) < FACING_RAD
         elif self._station is not None and self._patrol is not None:
             self.mode = self._station_mode
@@ -305,7 +321,7 @@ class Agent:
                 gx, gy = pts[self._patrol_k]
             if math.hypot(gx - pose.x, gy - pose.y) > PATROL_DIRECT_M:  # far (joining the stretch): plan, no walls
                 if self._spath is None or self._spath[-1] != (gx, gy):
-                    self._spath = astar(belief, (pose.x, pose.y), (gx, gy)) or [(gx, gy)]
+                    self._spath = plan_path(belief, (pose.x, pose.y), (gx, gy)) or [(pose.x, pose.y)]
                     self._spath[-1] = (gx, gy)
                 want, yaw_des = self._follow(pose, self._spath, PATROL_SPEED)
                 self._patrol_t = t  # progress along a planned path is not a stall
@@ -318,23 +334,30 @@ class Agent:
                     yaw_des = math.atan2(d[1], d[0])  # camera looks along the route too
         elif self._station is not None:
             self.mode = self._station_mode
-            sx, sy = self._station
+            if self._spath is None and math.hypot(self._station[0] - pose.x, self._station[1] - pose.y) > IN_POSITION_M:
+                self._spath = plan_path(belief, (pose.x, pose.y), self._station) or [(pose.x, pose.y)]
+            # arrive where the plan ends: if the post itself can't be reached (in a fire's hot zone, cut off),
+            # that is the closest safe point, so hold there instead of nudging at it forever
+            sx, sy = self._spath[-1] if self._spath else self._station
             dist = math.hypot(sx - pose.x, sy - pose.y)
             if dist > IN_POSITION_M:
                 if self._spath is None:
-                    self._spath = astar(belief, (pose.x, pose.y), self._station) or [self._station]
+                    self._spath = plan_path(belief, (pose.x, pose.y), self._station) or [(pose.x, pose.y)]
                 want, yaw_des = self._follow(pose, self._spath, config.MAX_SPEED)
                 if dist < 1.0 and self._station_face is not None:
                     fx, fy = self._station_face
                     yaw_des = math.atan2(fy - pose.y, fx - pose.x)
-            elif self._station_sweep:
-                wz_ff = 0.8  # sentinel: slow yaw sweep of its stretch of route
+            elif self._station_sweep:  # sentinel: scan its stretch of route (LiDAR is 360° anyway)
+                yaw_des = self._scan_yaw(t, self._station_face)
+                self._yaw_from_travel = False
             elif self._station_face is not None:
                 fx, fy = self._station_face
                 yaw_des = math.atan2(fy - pose.y, fx - pose.x)
+                self._yaw_from_travel = False
         elif area is None:
             self.mode = "IDLE"
-            wz_ff = 0.6  # slow look-around while waiting
+            yaw_des = self._scan_yaw(t, None, pose.yaw)  # look around without spinning on the spot
+            self._yaw_from_travel = False
         elif self.mode == "SWEEP" and self._sweep_left > 0:
             self._sweep_left -= SWEEP_WZ * config.CONTROL_DT
             wz_ff = SWEEP_WZ
@@ -368,26 +391,42 @@ class Agent:
                 gx, gy = self.path[-1]
                 dist_goal = math.hypot(gx - pose.x, gy - pose.y)
                 if dist_goal < ARRIVE_M:
-                    if self._goal_still_useful(belief, area):
+                    recent = (self._last_sweep is not None and t - self._last_sweep[0] < SWEEP_EVERY_S
+                              and math.hypot(pose.x - self._last_sweep[1], pose.y - self._last_sweep[2]) < SWEEP_APART_M)
+                    if self._goal_still_useful(belief, area) and not recent:
                         self.mode = "SWEEP"
                         self._sweep_left = 2 * math.pi
+                        self._last_sweep = (t, pose.x, pose.y)
                     else:
+                        if recent and self._goal_still_useful(belief, area):
+                            self._give_up_goal(belief, area)  # just swept near here: don't spin again
                         self.invalidate()
                 else:
                     want, yaw_des = self._follow(pose, self.path, config.MAX_SPEED)
 
         # ------------------------------------------------------------ reflex
-        v = want + self._separation(pose, others) + self._walls(pose, r.lidar)
+        sep, wall = self._separation(pose, others), self._walls(pose, r.lidar)
+        self.debug = (want, sep, wall)  # last command's parts (diagnostics)
+        v = want + sep + wall
         sp = float(np.linalg.norm(v))
         if sp > config.MAX_SPEED:
             v *= config.MAX_SPEED / sp
         self._v = (1 - SMOOTH) * self._v + SMOOTH * v
+        if yaw_des is not None and self._yaw_from_travel and float(np.linalg.norm(want)) < SLOW_MS:
+            yaw_des = None  # nearly stopped: the "travel direction" is noise, hold the heading
+            wz_ff = 0.0
         if yaw_des is not None:
             wz = float(np.clip(YAW_GAIN * _wrap(yaw_des - pose.yaw), -WZ_MAX, WZ_MAX))
         else:
             wz = wz_ff
         vz = ALT_GAIN * (self.altitude - pose.z) if pose.z > 0.05 else 0.0
         return VelCmd(vx=float(self._v[0]), vy=float(self._v[1]), vz=vz, wz=wz), done
+
+    def _scan_yaw(self, t: float, face: tuple[float, float] | None, around: float | None = None) -> float:
+        """Slow back-and-forth camera scan (±70°) instead of spinning in circles."""
+        if self._scan_base is None or face is not None:
+            self._scan_base = around if around is not None else (self._scan_base or 0.0)
+        return _wrap(self._scan_base + SCAN_AMPL * math.sin(SCAN_RATE * t))
 
     @staticmethod
     def _follow(pose: Pose, path: list[tuple[float, float]], vmax: float) -> tuple[np.ndarray, float | None]:
