@@ -19,8 +19,16 @@ GT="npx --yes @gltf-transform/cli@${GLTF_TRANSFORM_VERSION:-4}"
 
 [[ -f "$RAW" ]] || { echo "missing $RAW (export the Scaniverse GLB there)" >&2; exit 1; }
 
-echo "== web: $MAP_DIR/scan.glb"
-$GT optimize "$RAW" "$MAP_DIR/scan.glb" --compress meshopt --texture-compress webp --texture-size "$TEX"
+# Web: an exact copy of the original when it fits the 50 MB limit (spec §1.2.6); otherwise
+# compress (meshopt + webp textures). COMPRESS=1 forces compression.
+raw_size=$(wc -c < "$RAW")
+if [[ "${COMPRESS:-0}" != "1" ]] && (( raw_size <= 50000000 )); then
+  echo "== web: $MAP_DIR/scan.glb = exact copy of the original ($((raw_size / 1000000)) MB)"
+  cp "$RAW" "$MAP_DIR/scan.glb"
+else
+  echo "== web: $MAP_DIR/scan.glb (compressed: original is $((raw_size / 1000000)) MB)"
+  $GT optimize "$RAW" "$MAP_DIR/scan.glb" --compress meshopt --texture-compress webp --texture-size "$TEX"
+fi
 
 echo "== sim: $MAP_DIR/sim.glb"
 $GT simplify "$RAW" "$MAP_DIR/sim.glb" --ratio "$RATIO" --error "$ERROR"

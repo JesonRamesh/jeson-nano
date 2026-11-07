@@ -25,8 +25,15 @@ function Invoke-GT([string[]]$GtArgs) {
     if ($LASTEXITCODE -ne 0) { throw "gltf-transform $($GtArgs[0]) failed ($LASTEXITCODE)" }
 }
 
-Write-Host "== web: $Scan"
-Invoke-GT @("optimize", $Raw, $Scan, "--compress", "meshopt", "--texture-compress", "webp", "--texture-size", "$Tex")
+# Web: an exact copy of the original when it fits the 50 MB limit (spec §1.2.6); else compress.
+$rawSize = (Get-Item $Raw).Length
+if ($rawSize -le 50MB) {
+    Write-Host "== web: $Scan = exact copy of the original ($([math]::Round($rawSize / 1MB)) MB)"
+    Copy-Item $Raw $Scan -Force
+} else {
+    Write-Host "== web: $Scan (compressed: original is $([math]::Round($rawSize / 1MB)) MB)"
+    Invoke-GT @("optimize", $Raw, $Scan, "--compress", "meshopt", "--texture-compress", "webp", "--texture-size", "$Tex")
+}
 
 Write-Host "== sim: $Sim"
 Invoke-GT @("simplify", $Raw, $Sim, "--ratio", $Ratio, "--error", $Error)
