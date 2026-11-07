@@ -28,7 +28,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     scenario = Scenario.load(args.map)
     world = World(args.map, scenario)
-    perception = Perception(mode=args.perception, ground_truth=world.ground_truth)
+    perception = Perception(
+        mode=args.perception,
+        ground_truth=world.ground_truth,  # mock mode only
+        line_of_sight=world.line_of_sight,  # mock occlusion
+        pixel_to_world=world.pixel_to_world,  # required by local/remote
+    )
     swarm = Swarm(PriorMap.from_map(args.map, scenario), list(scenario.drones.ids))
     bus = Bus()
     # TODO(D): start sgr.server on a background thread here, passing `bus` (§3).
@@ -44,6 +49,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"sgr: map={args.map} perception={args.perception} speed={args.speed} render={not args.no_render}")
     try:
+        if args.perception != "mock":
+            print("sgr: waiting for Gemma to warm up (~30 s)...")
+        if not perception.wait_ready(timeout=120.0):  # don't hang forever if Ollama is down
+            print("sgr: WARNING perception not ready, starting anyway")
         loop.run(max_ticks=args.max_ticks)
     except KeyboardInterrupt:
         pass

@@ -97,6 +97,20 @@ class FakeWorld:
         x, y = self._drones[drone]["pose"][:2]
         return self._heat_at(x, y)
 
+    def line_of_sight(self, drone: str, x: float, y: float, z: float = 0.0) -> bool:
+        """True if nothing (wall or debris) blocks the 2D line from the drone to (x, y).
+
+        The last 0.3 m is ignored, so a target standing against a wall still counts as visible.
+        """
+        px, py = self._drones[drone]["pose"][:2]
+        dist = math.hypot(x - px, y - py)
+        n = int(max(0.0, dist - 0.3) / _RAY_STEP)
+        for k in range(1, n + 1):
+            f = k * _RAY_STEP / dist
+            if self._is_blocked(px + f * (x - px), py + f * (y - py)):
+                return False
+        return True
+
     def render_drone(self, drone: str) -> tuple[np.ndarray, CamInfo]:
         frame = np.full((config.CAM_H, config.CAM_W, 3), 45, dtype=np.uint8)
         frame[: config.CAM_H // 2] = 30  # "ceiling" darker than "floor"
@@ -113,16 +127,17 @@ class FakeWorld:
         return XY(x=x + r * math.cos(a), y=y + r * math.sin(a))
 
     # ---------------------------------------------------------------- change tool
-    def place_debris(self, x: float, y: float) -> Handle | None:
-        if len(self._debris) >= _DEBRIS_POOL or not self._placeable(x, y):
+    def place_debris(self, x: float, y: float, force: bool = False) -> Handle | None:
+        if len(self._debris) >= _DEBRIS_POOL or not (force or self._placeable(x, y)):
             return None
         h = Handle(id=self._new_id("debris"), kind="debris", x=x, y=y)
         self._debris[h.id] = h
         self._rebuild_blocked()
         return h
 
-    def place_fire(self, x: float, y: float) -> Handle | None:
-        if len(self._fires) >= _FIRE_POOL or not self._placeable(x, y):
+    def place_fire(self, x: float, y: float, force: bool = False) -> Handle | None:
+        """force=True skips the click-safety checks (flare-up puts fire on its drone, §7.4)."""
+        if len(self._fires) >= _FIRE_POOL or not (force or self._placeable(x, y)):
             return None
         h = Handle(id=self._new_id("fire"), kind="fire", x=x, y=y)
         self._fires[h.id] = h
