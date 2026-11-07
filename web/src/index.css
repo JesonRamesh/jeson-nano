@@ -1,20 +1,38 @@
+/* Design tokens: a ground-station look. Graphite surfaces, hairline rules, one warm
+   instrument accent, telemetry in a monospace face. Fonts are bundled (no network). */
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+
 :root {
-  --bg: #0e1014;
-  --panel: #171a21;
-  --border: #2a2f3a;
-  --text: #d8dde6;
-  --muted: #8a93a3;
-  --ok: #3ddc84;
-  --warn: #ffb020;
-  --bad: #ff4d4f;
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  --bg: #07090b;
+  --surface: #0c0f13;
+  --surface-2: #11151a;
+  --raise: #161b21;
+  --line: #1b2128;
+  --line-2: #273039;
+  --text: #d5dae0;
+  --dim: #8590a0;
+  --faint: #4b5461;
+  --accent: #f0b23b; /* instrument amber: focus, active, selection */
+  --ok: #3ccf91;
+  --warn: #f0b23b;
+  --bad: #ff5a4e;
+  --info: #7fb4ff;
+
+  --sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   /* Projector-readable: body text >= 16 px (spec §10.1). */
-  font: 18px/1.4 var(--sans);
+  font: 16px/1.45 var(--sans);
+  font-feature-settings: 'tnum' 1;
   color: var(--text);
   background: var(--bg);
   color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -26,4 +44,14 @@ body,
 #root {
   margin: 0;
   height: 100%;
+}
+
+::selection {
+  background: rgba(240, 178, 59, 0.35);
+}
+
+/* thin, quiet scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
 }

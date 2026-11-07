@@ -74,7 +74,7 @@ function Row({ row, colour, open, onToggle }: { row: TraceRow; colour: string; o
         </span>
         <span className={`chip action action-${row.action}`}>{row.action}</span>
         <span className="trace-reason">{noEmDash(row.reason)}</span>
-        {(e.frame_id || e.scan) && <span className="muted evidence-hint">{e.frame_id ? '📷' : '📡'}</span>}
+        {(e.frame_id || e.scan) && <span className="evidence-hint">{e.frame_id ? 'IMG' : 'SCAN'}</span>}
       </div>
       {open && (
         <div className="trace-evidence" onClick={(ev) => ev.stopPropagation()}>
@@ -126,6 +126,7 @@ export function TracePanel() {
     <section className={`trace-panel ${expanded ? 'expanded' : 'collapsed'}`}>
       <div className="trace-head">
         <h2>Decision trace</h2>
+        <span className="trace-count">{trace.length} decisions</span>
         {trace.length > COLLAPSED_ROWS && (
           <button className="trace-toggle" onClick={() => setExpanded(!expanded)}>
             {expanded ? 'Show latest 3' : `Show all (${trace.length})`}

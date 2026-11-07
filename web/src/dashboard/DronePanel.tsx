@@ -16,56 +16,81 @@ interface Props {
 
 const CAM_W = 320
 const CAM_H = 240
-const TEMP_MAX = 120 // °C at the top of the bar
 
-const STATUS_CLASS: Record<string, string> = {
-  confirmed: 'chip-bad',
-  low_conf: 'chip-warn',
-  pending: 'chip-warn',
-  rejected: 'chip-ok',
-  unconfirmed: 'chip-warn',
+/** Detection status -> tone used for its tag on the feed. */
+const DET_TONE: Record<string, string> = {
+  confirmed: 'bad',
+  low_conf: 'warn',
+  pending: 'warn',
+  rejected: 'ok',
+  unconfirmed: 'warn',
 }
 
-/** LiDAR mini-polar: 36 rays, ray k at yaw + k·10°, drawn heading-up. */
-function LidarPolar({ lidar, colour }: { lidar: number[]; colour: string }) {
+/**
+ * LiDAR top view: the drone at the centre, heading up, 36 rays (ray k at yaw + k·10°),
+ * 6 m to the edge. Drawn at device resolution so it stays crisp on the projector.
+ */
+function LidarTopView({ lidar, colour }: { lidar: number[]; colour: string }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const c = ref.current
     if (!c) return
+    const dpr = window.devicePixelRatio || 1
+    const css = c.clientWidth || 104
+    if (c.width !== Math.round(css * dpr)) {
+      c.width = Math.round(css * dpr)
+      c.height = Math.round(css * dpr)
+    }
     const ctx = c.getContext('2d')!
-    const s = c.width
-    const r0 = s / 2 - 2
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    const s = css
+    const mid = s / 2
+    const r0 = mid - 3
     ctx.clearRect(0, 0, s, s)
-    ctx.strokeStyle = '#2a2f3a'
+    // range rings at 2 / 4 / 6 m + heading tick
+    ctx.strokeStyle = 'rgba(213, 218, 224, 0.14)'
     ctx.lineWidth = 1
-    for (const f of [1, 0.5]) {
+    for (const f of [1 / 3, 2 / 3, 1]) {
       ctx.beginPath()
-      ctx.arc(s / 2, s / 2, r0 * f, 0, Math.PI * 2)
+      ctx.arc(mid, mid, r0 * f, 0, Math.PI * 2)
       ctx.stroke()
     }
-    if (!lidar.length) return
-    ctx.fillStyle = colour + '55'
-    ctx.strokeStyle = colour
     ctx.beginPath()
-    lidar.forEach((r, k) => {
-      // ray 0 = heading = up; CCW positive -> to the left on screen
-      const a = Math.PI / 2 + (k * Math.PI) / 18
-      const d = (Math.min(r, 6) / 6) * r0
-      const x = s / 2 + d * Math.cos(a)
-      const y = s / 2 - d * Math.sin(a)
-      if (k === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
-    })
+    ctx.moveTo(mid, mid - r0)
+    ctx.lineTo(mid, mid - r0 + 6)
+    ctx.stroke()
+    if (lidar.length) {
+      ctx.beginPath()
+      lidar.forEach((r, k) => {
+        const a = Math.PI / 2 + (k * Math.PI) / 18 // ray 0 = heading = up; CCW = left
+        const d = (Math.min(r, 6) / 6) * r0
+        const x = mid + d * Math.cos(a)
+        const y = mid - d * Math.sin(a)
+        if (k === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      })
+      ctx.closePath()
+      ctx.fillStyle = colour + '30'
+      ctx.fill()
+      ctx.strokeStyle = colour
+      ctx.lineWidth = 1.25
+      ctx.stroke()
+    }
+    // the drone itself
+    ctx.fillStyle = colour
+    ctx.beginPath()
+    ctx.moveTo(mid, mid - 4)
+    ctx.lineTo(mid + 3, mid + 3)
+    ctx.lineTo(mid - 3, mid + 3)
     ctx.closePath()
     ctx.fill()
-    ctx.stroke()
   }, [lidar, colour])
-  return <canvas ref={ref} width={84} height={84} className="lidar-polar" />
+  return <canvas ref={ref} className="lidar-top" />
 }
 
 /**
- * One drone panel: camera JPEG + bbox labels, LiDAR mini-polar, temperature bar,
- * Gemma caption + confidence, status chip. Lost -> static + "SIGNAL LOST".
+ * One drone feed: the camera image fills the tile; telemetry sits on it as an overlay
+ * (id, status, task, temperature, frame #, LiDAR top view, detection + Gemma caption).
  * Frames bypass React (≈10 fps × 4): the parent calls showFrame() directly.
  */
 export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePanel(
@@ -90,83 +115,88 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
       if (imgRef.current) imgRef.current.src = url
       if (urlRef.current) URL.revokeObjectURL(urlRef.current)
       urlRef.current = url
-      if (seqRef.current) seqRef.current.textContent = `#${seq}`
+      if (seqRef.current) seqRef.current.textContent = `F${String(seq).padStart(5, '0')}`
       frameIdRef.current = `${id}-${seq}`
       syncHold()
     },
   }))
   useEffect(syncHold) // a new detection may be for the frame already on screen
-  useEffect(() => () => {
-    if (urlRef.current) URL.revokeObjectURL(urlRef.current)
-  }, [])
+  useEffect(
+    () => () => {
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+    },
+    [],
+  )
 
   const alive = state?.alive ?? true
   const temp = state?.temp ?? 0
   const hot = temp > tempLimit
   const g = detection?.gemma
+  const status = (state?.status ?? 'NO DATA').toUpperCase()
 
   return (
-    <div className={`drone-panel ${alive ? '' : 'lost'}`} style={{ borderColor: colour }}>
-      <div className="drone-head">
-        <span className="drone-id" style={{ color: colour }}>
-          {id}
-        </span>
-        <span className={`chip status-${(state?.status ?? '').toLowerCase()}`}>{state?.status ?? '...'}</span>
-        <span className="muted drone-task">{state?.task && noEmDash(alive ? state.task : `last: ${state.task}`)}</span>
-        <span ref={seqRef} className="muted mono small" />
-      </div>
-      <div className="drone-body">
-        <div className="drone-cam">
-          <img ref={imgRef} alt={`${id} camera`} />
-          {alive && detection && detection.boxes.length > 0 && (
-            // key: a new detection (or status change) remounts, restarting the fade
-            <div ref={boxesRef} key={`${detection.frame_id}|${detection.status}`} className="boxes">
-              {detection.boxes.map((b, n) => (
-                <div
-                  key={n}
-                  className={`bbox bbox-${b.label}`}
-                  style={{
-                    left: `${(b.x / CAM_W) * 100}%`,
-                    top: `${(b.y / CAM_H) * 100}%`,
-                    width: `${(b.w / CAM_W) * 100}%`,
-                    height: `${(b.h / CAM_H) * 100}%`,
-                  }}
-                >
-                  <span>
-                    {b.label} {b.score.toFixed(2)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          {!alive && <div className="signal-lost">SIGNAL LOST</div>}
-        </div>
-        <div className="drone-side">
-          <LidarPolar lidar={alive ? (state?.lidar ?? []) : []} colour={colour} />
-          <div className="temp" title={`${temp.toFixed(0)} °C`}>
-            <div className="temp-bar">
+    <div className={`feed ${alive ? '' : 'lost'}`} style={{ ['--drone' as string]: colour }}>
+      <div className="feed-cam">
+        {/* 4:3 box fitted inside the tile: image, reticle and boxes share its coordinates */}
+        <div className="cam-box">
+        <img ref={imgRef} alt={`${id} camera`} draggable={false} />
+        <div className="reticle" />
+        {alive && detection && detection.boxes.length > 0 && (
+          // key: a new detection (or status change) remounts, restarting the fade
+          <div ref={boxesRef} key={`${detection.frame_id}|${detection.status}`} className="boxes">
+            {detection.boxes.map((b, n) => (
               <div
-                className={`temp-fill ${hot ? 'hot' : ''}`}
-                style={{ height: `${Math.min(100, (temp / TEMP_MAX) * 100)}%` }}
-              />
-              <div className="temp-limit" style={{ bottom: `${(tempLimit / TEMP_MAX) * 100}%` }} />
-            </div>
-            <span className={`mono ${hot ? 'bad' : ''}`}>{temp.toFixed(0)}°</span>
+                key={n}
+                className={`bbox bbox-${b.label}`}
+                style={{
+                  left: `${(b.x / CAM_W) * 100}%`,
+                  top: `${(b.y / CAM_H) * 100}%`,
+                  width: `${(b.w / CAM_W) * 100}%`,
+                  height: `${(b.h / CAM_H) * 100}%`,
+                }}
+              >
+                <span>
+                  {b.label} {b.score.toFixed(2)}
+                </span>
+              </div>
+            ))}
           </div>
-        </div>
-      </div>
-      <div className="drone-foot">
-        {detection ? (
-          <>
-            <span className={`chip ${STATUS_CLASS[detection.status] ?? ''}`}>{detection.status.toUpperCase()}</span>
-            <span className="gemma-caption">
-              {g?.pending ? 'Gemma checking…' : g?.caption ? noEmDash(g.caption) : 'no Gemma result'}
-              {g?.conf != null && !g.pending && <span className="muted"> · {g.conf.toFixed(2)}</span>}
-            </span>
-          </>
-        ) : (
-          <span className="muted">no detections</span>
         )}
+        </div>
+        {!alive && (
+          <div className="signal-lost">
+            <span>SIGNAL LOST</span>
+          </div>
+        )}
+
+        {/* --- telemetry overlay --- */}
+        <div className="feed-top">
+          <span className="feed-id">{id}</span>
+          <span className={`feed-status status-${status.toLowerCase().replace(/\s+/g, '-')}`}>{status}</span>
+          <span className="feed-task">{state?.task && noEmDash(alive ? state.task : `last: ${state.task}`)}</span>
+          <span className={`feed-temp ${hot ? 'hot' : ''}`} title="Drone temperature">
+            {alive ? `${temp.toFixed(0)}°C` : '--°C'}
+          </span>
+        </div>
+        <div className="feed-bottom">
+          <div className="feed-det">
+            {detection ? (
+              <>
+                <span className={`det-tag tone-${DET_TONE[detection.status] ?? 'dim'}`}>
+                  {detection.status.replace('_', ' ')}
+                </span>
+                <span className="det-caption">
+                  {g?.pending ? 'Gemma checking' : g?.caption ? noEmDash(g.caption) : 'no Gemma result'}
+                  {g?.conf != null && !g.pending && <span className="det-conf">{g.conf.toFixed(2)}</span>}
+                </span>
+              </>
+            ) : (
+              <span className="det-none">no detections</span>
+            )}
+            <span ref={seqRef} className="feed-seq" />
+          </div>
+          <LidarTopView lidar={alive ? (state?.lidar ?? []) : []} colour={colour} />
+        </div>
       </div>
     </div>
   )
