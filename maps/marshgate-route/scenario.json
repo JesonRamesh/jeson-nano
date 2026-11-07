@@ -193,6 +193,11 @@
       "edge": "e14",
       "at": 0.8,
       "kind": "debris"
+    },
+    {
+      "edge": "e7",
+      "at": 0.45,
+      "kind": "debris"
     }
   ],
   "checkpoints": [
@@ -253,5 +258,13 @@
       "y": 31.1,
       "size": 1.5
     }
-  ]
+  ],
+  "flare": {
+    "t": 65.0,
+    "target": "D3"
+  },
+  "beats": {
+    "decoy_drone": null,
+    "d3_area_node": "n12"
+  }
 }
