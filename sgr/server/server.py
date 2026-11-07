@@ -50,6 +50,7 @@ WEB_DIST = REPO_ROOT / "web" / "dist"
 MAPS_DIR = REPO_ROOT / "maps"
 PROPOSE_GRAPH = REPO_ROOT / "tools" / "propose_graph.py"
 
+TRACE_REPLAY = 200  # trace rows kept for late-joining browsers
 FRAME_RING = 300  # frames kept per drone for trace evidence (spec §10.2)
 CLIENT_QUEUE = 256  # per-browser backlog before we start dropping the oldest
 MAP_FILES = {"grid.png", "scan.glb", "transform.json", "preview.png"}
@@ -97,6 +98,9 @@ class Hub:
         self.bus = bus
         self.hello_text = hello.model_dump_json() if hello else None
         self.clients: set[asyncio.Queue] = set()
+        # Replayed to browsers that connect mid-run, so they see the trace so far.
+        self.trace_texts: deque[str] = deque(maxlen=TRACE_REPLAY)
+        self.detection_texts: dict[str, str] = {}  # latest detection per drone
         self._frames: dict[str, deque[FrameOut]] = {}  # drone -> recent frames
         self._frames_lock = threading.Lock()
 
@@ -133,6 +137,14 @@ class Hub:
                     # later must get that one, not the hello from server start.
                     if item.text.startswith('{"type":"hello"'):
                         self.hello_text = item.text
+                        self.trace_texts.clear()  # new run: the loop re-sends its trace after hello
+                        self.detection_texts.clear()
+                    elif item.text.endswith('"type":"trace"}'):  # TraceMsg puts `type` last
+                        self.trace_texts.append(item.text)
+                    elif item.text.startswith('{"type":"detection"'):
+                        drone = json.loads(item.text).get("drone")
+                        if drone:
+                            self.detection_texts[drone] = item.text
                     self._broadcast(item.text)
             # Always yield so WS senders run even under a steady stream.
             await asyncio.sleep(0 if items else 0.005)
@@ -178,9 +190,11 @@ def create_app(hub: Hub, map_dir: Path | None = None) -> FastAPI:
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:
         await ws.accept()
-        q: asyncio.Queue = asyncio.Queue(maxsize=CLIENT_QUEUE)
+        q: asyncio.Queue = asyncio.Queue(maxsize=CLIENT_QUEUE + TRACE_REPLAY)
         if hub.hello_text:
             q.put_nowait(hub.hello_text)
+            for text in [*hub.trace_texts, *hub.detection_texts.values()]:
+                q.put_nowait(text)
         hub.clients.add(q)
 
         async def sender() -> None:

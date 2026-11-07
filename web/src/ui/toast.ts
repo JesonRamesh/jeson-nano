@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { noEmDash } from './text'
 
 export interface Toast {
   id: number
@@ -13,7 +14,7 @@ const emit = () => listeners.forEach((fn) => fn())
 
 /** Show a short message in the corner for `ms` milliseconds. */
 export function toast(text: string, kind: Toast['kind'] = 'info', ms = 3500) {
-  const t = { id: nextId++, text, kind }
+  const t = { id: nextId++, text: noEmDash(text), kind }
   toasts = [...toasts.slice(-3), t]
   emit()
   setTimeout(() => {
