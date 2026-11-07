@@ -41,6 +41,10 @@ def test_loop_runs_headless(test_map) -> None:
     assert loop.ticks == TICKS
     assert math.isclose(loop.t, TICKS * 0.1, rel_tol=1e-6)
     assert "D3" in loop.dead  # flare-up at t=65 s
+    # ...and the flare-up really placed a fire (regression: clearance check refused it)
+    h = loop.flare_fire
+    assert h is not None, "flare-up fire was not placed"
+    assert any(math.hypot(f.x - h.x, f.y - h.y) < 0.1 for f in loop.world.ground_truth().fires)
 
 
 @pytest.mark.xfail(reason="needs the real Swarm (S, H1-H7) and mock Perception (P)", strict=False)

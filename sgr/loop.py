@@ -63,6 +63,7 @@ class SimLoop:
         self.click_stack: list[Handle] = []
         self.swarm_state: SwarmState | None = None
         self._flared = False
+        self.flare_fire: Handle | None = None
         self._frame_seq = 0
         self._cam_rr = 0
         self._last_state_pub = -math.inf
@@ -89,7 +90,9 @@ class SimLoop:
         # 2 timed events: flare-up (§7.4)
         if s.flare and not self._flared and self.t >= s.flare.t and s.flare.target not in self.dead:
             p = w.drone_pose(s.flare.target)
-            w.place_fire(p.x, p.y)
+            # force: bypass the 1 m click clearance (the victim drone is AT this spot).
+            # Not pushed on click_stack, so Undo can't remove the flare-up fire.
+            self.flare_fire = w.place_fire(p.x, p.y, force=True)
             w.kill_drone(s.flare.target)
             self.dead.add(s.flare.target)
             self._flared = True
