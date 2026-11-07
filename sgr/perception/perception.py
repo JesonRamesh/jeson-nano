@@ -12,6 +12,7 @@ relooks + 1). The same `id` is kept throughout.
 Optional keyword arguments (additive to the S scaffold):
 - line_of_sight=world.line_of_sight: mock occlusion. Without it, mock sees through walls.
 - pixel_to_world=world.pixel_to_world: required for local/remote (world position of a detection).
+- mock_latency_s=7.0: mock Gemma answers after 7 s instead of 1 s, to reproduce live timing headless.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ class Perception:
         pixel_to_world: Callable | None = None,
         gemma: GemmaClient | None = None,
         warm: bool = True,
+        mock_latency_s: float | None = None,
     ) -> None:
         self.mode = mode
         if mode == "mock":
@@ -51,6 +53,8 @@ class Perception:
                 warnings.warn("mock perception without line_of_sight: targets are visible through walls",
                               stacklevel=2)
             self._impl = MockPerception(ground_truth, line_of_sight)
+            if mock_latency_s is not None:  # rehearse live-Gemma timing headless (e4b: ~5-8 s)
+                self._impl.latency_s = float(mock_latency_s)
         else:
             if pixel_to_world is None:
                 raise ValueError(f"{mode} perception needs pixel_to_world=world.pixel_to_world")

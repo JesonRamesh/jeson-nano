@@ -95,6 +95,17 @@ def test_mock_decoy_rejected_on_relook_then_blacklisted(studio):
     assert len(again) == 1 and again[0].id != det.id
 
 
+def test_mock_latency_is_configurable(studio):
+    """Rehearse live-Gemma timing headless: answers arrive after mock_latency_s, not 1 s."""
+    p = Perception(mode="mock", ground_truth=studio.ground_truth, line_of_sight=studio.line_of_sight,
+                   mock_latency_s=7.0)
+    assert _look(p, studio, "D1", 0.0)[0].status == "pending"
+    assert _look(p, studio, "D4", 6.9) == []
+    done = _look(p, studio, "D4", 7.0)
+    assert done[0].status == "confirmed" and done[0].gemma.latency_s == 7.0
+    assert p.metrics().p50_s == 7.0
+
+
 def test_mock_dedups_repeated_views(studio):
     p = _mock(studio)
     assert len(_look(p, studio, "D1", 0.0)) == 1
