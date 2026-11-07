@@ -271,6 +271,47 @@ def test_live_false_alarm_rejected_after_relooks_and_blacklisted(studio):
     p.close()
 
 
+@needs_gl
+def test_live_stale_relooks_cannot_reject(studio):
+    """No fresh view arrives, so the re-look falls back to the old frame: a 'not fire' answer then only
+    makes it unconfirmed (live run: a real fire was rejected from a stale/far view)."""
+    p = _live(studio, lambda f: _g(fire=False, conf=0.8))
+    _frame(p, studio, "D1", 0.0)
+    det = _settle(p)[-1]
+    assert det.status == "low_conf"
+    studio.teleport_drone("D4", 9.0, 9.8, math.pi / 2)  # facing a wall: never sees the fire
+    t = 0.0
+    for k in (1, 2):
+        p.request_relook(det.id)
+        p.poll()
+        t += 3.5
+        _frame(p, studio, "D4", t, 10 + k)  # time passes, only stale frames available
+        last = _settle(p)[-1]
+    assert last.status == "unconfirmed" and last.relooks == 2  # not rejected...
+    again = p._impl.fd.process("D1", studio.render_drone("D1")[0], t + 1, "x", studio.pixel_to_world)
+    assert again and not again[0].is_new  # ...and not blacklisted
+    p.close()
+
+
+@needs_gl
+def test_live_far_view_cannot_reject(studio):
+    """A fresh view from > 7 m can't prove the object isn't there."""
+    from sgr.contracts import CamInfo, Pose
+
+    p = _live(studio, lambda f: _g(fire=False, conf=0.8))
+    img, cam = studio.render_drone("D1")
+    far = CamInfo(**{**cam.model_dump(), "pose": Pose(x=-20.0, y=3.0, z=1.6, yaw=0.0)})  # 24 m from the fire
+    p.submit_frame("D1", img, far, 0.0, "f1")
+    det = _settle(p)[-1]
+    for k in (1, 2):
+        p.request_relook(det.id)
+        p.poll()
+        p.submit_frame("D1", img, far, float(k), f"f{k + 1}")  # fresh, but far
+        last = _settle(p)[-1]
+    assert last.status == "unconfirmed"
+    p.close()
+
+
 def test_live_needs_pixel_to_world():
     with pytest.raises(ValueError):
         Perception(mode="local", gemma=ScriptedGemma(lambda f: _g()), warm=False)
