@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import type { DetectionMsg, DroneState } from '../contracts'
+import { noEmDash } from '../ui/text'
 
 export interface DronePanelHandle {
   showFrame: (jpeg: Blob, seq: number) => void
@@ -99,8 +100,8 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
         <span className="drone-id" style={{ color: colour }}>
           {id}
         </span>
-        <span className={`chip status-${(state?.status ?? '').toLowerCase()}`}>{state?.status ?? '—'}</span>
-        <span className="muted drone-task">{state?.task && (alive ? state.task : `last: ${state.task}`)}</span>
+        <span className={`chip status-${(state?.status ?? '').toLowerCase()}`}>{state?.status ?? '...'}</span>
+        <span className="muted drone-task">{state?.task && noEmDash(alive ? state.task : `last: ${state.task}`)}</span>
         <span ref={seqRef} className="muted mono small" />
       </div>
       <div className="drone-body">
@@ -144,7 +145,7 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
           <>
             <span className={`chip ${STATUS_CLASS[detection.status] ?? ''}`}>{detection.status.toUpperCase()}</span>
             <span className="gemma-caption">
-              {g?.pending ? 'Gemma checking…' : (g?.caption ?? 'no Gemma result')}
+              {g?.pending ? 'Gemma checking…' : g?.caption ? noEmDash(g.caption) : 'no Gemma result'}
               {g?.conf != null && !g.pending && <span className="muted"> · {g.conf.toFixed(2)}</span>}
             </span>
           </>

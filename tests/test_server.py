@@ -109,3 +109,21 @@ def test_rehello_after_snapshot_load_is_replayed_to_new_clients(setup, map_dir: 
         assert parse_server_message(ws.receive_text()).entrance.x == 9.5
     with client.websocket_connect("/ws") as ws:
         assert parse_server_message(ws.receive_text()).entrance.x == 9.5
+
+
+def test_late_browser_gets_trace_so_far(setup) -> None:
+    from sgr.contracts import Evidence, TraceMsg
+
+    client, bus, hub, scenario = setup
+    for k in range(3):
+        bus.publish(TraceMsg(id=f"r{k}", t=float(k), drone="D1", action="EXPLORE", reason="x",
+                             evidence=Evidence(sensor="planner", value=k)))
+    for _ in range(100):  # let the server's pump move them off the bus
+        if len(hub.trace_texts) == 3:
+            break
+        time.sleep(0.02)
+    assert len(hub.trace_texts) == 3  # fail fast instead of blocking on receive below
+    with client.websocket_connect("/ws") as ws:
+        assert parse_server_message(ws.receive_text()).type == "hello"
+        got = [parse_server_message(ws.receive_text()).id for _ in range(3)]
+        assert got == ["r0", "r1", "r2"]

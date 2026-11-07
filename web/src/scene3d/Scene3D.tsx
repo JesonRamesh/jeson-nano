@@ -3,9 +3,11 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Component, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import { SkeletonUtils, type OrbitControls as OrbitControlsImpl } from 'three-stdlib'
-import type { Handle, HelloMsg, Transform } from '../contracts'
+import type { ClientMsg, Handle, HelloMsg, Transform } from '../contracts'
+import { placeClick, undoClick, type ClickMode } from '../dashboard/clickTool'
 import { useFreeGrid, type FreeGrid } from '../state/grid'
-import { CELL_CODE, sim, useSim, type SimEventMsg } from '../state/store'
+import { BELIEF_LEGEND, paintBelief } from '../state/beliefPaint'
+import { sim, useSim, type SimEventMsg } from '../state/store'
 import { DEBRIS_SIZE } from './constants'
 import { mergeWalls } from './walls'
 
@@ -15,7 +17,6 @@ import { mergeWalls } from './walls'
 // only needs transform.json's M.
 
 const WALL_H = 2.6
-const BELIEF_CAP = 4000 // max instanced belief cells per layer
 const MAX_FPS = 30
 const NO_DRONES: { id: string; colour: string }[] = []
 
@@ -298,48 +299,69 @@ function ClickObjects() {
   )
 }
 
-/** What the swarm believes: confirmed fire / danger / blocked / unsafe cells on the floor. */
-function BeliefCells() {
-  const layers = useMemo(
-    () => [
-      { code: CELL_CODE.fire, color: '#ff6d00', opacity: 0.85, z: 0.03 },
-      { code: CELL_CODE.danger, color: '#ffb020', opacity: 0.35, z: 0.025 },
-      { code: CELL_CODE.blocked_new, color: '#ff4d4f', opacity: 0.8, z: 0.035 },
-      { code: CELL_CODE.unsafe, color: '#ab47bc', opacity: 0.4, z: 0.02 },
-    ],
-    [],
-  )
-  const refs = useRef<(THREE.InstancedMesh | null)[]>([])
+/**
+ * What the swarm believes, painted on the floor: searched (blue tint), blocked (red hatch),
+ * fire / danger (orange), unsafe (purple). One texture at belief resolution (0.2 m per pixel),
+ * repainted at most 4x a second when the belief grid changes.
+ */
+function BeliefOverlay() {
+  const hello = useSim((s) => s.hello)
+  const canvas = useMemo(() => document.createElement('canvas'), [])
+  const texture = useMemo(() => {
+    const t = new THREE.CanvasTexture(canvas)
+    t.magFilter = THREE.NearestFilter
+    t.minFilter = THREE.LinearFilter
+    t.colorSpace = THREE.SRGBColorSpace
+    return t
+  }, [canvas])
   const version = useRef(-1)
-  useFrame(() => {
+  const last = useRef(0)
+  const mesh = useRef<THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>>(null)
+  useFrame(({ clock }) => {
     const b = sim.belief
-    if (!b || b.version === version.current) return
+    if (!b || b.version === version.current || clock.elapsedTime - last.current < 0.25) return
     version.current = b.version
-    const m = new THREE.Matrix4()
-    layers.forEach((layer, li) => {
-      const mesh = refs.current[li]
-      if (!mesh) return
-      let n = 0
-      for (let k = 0; k < b.cells.length && n < BELIEF_CAP; k++) {
-        if (b.cells[k] !== layer.code) continue
-        const i = k % b.w
-        const j = Math.floor(k / b.w)
-        m.makeTranslation((i + 0.5) * b.res, (j + 0.5) * b.res, layer.z)
-        mesh.setMatrixAt(n++, m)
-      }
-      mesh.count = n
-      mesh.instanceMatrix.needsUpdate = true
-    })
+    last.current = clock.elapsedTime
+    const map = mesh.current?.material.map
+    if (!map) return
+    const resized = canvas.width !== b.w || canvas.height !== b.h
+    paintBelief(b, canvas)
+    if (resized) map.dispose() // new size: let three re-upload from scratch
+    map.needsUpdate = true
   })
+  useEffect(() => () => texture.dispose(), [texture])
+  const b = sim.belief
+  if (!hello || !b) return null
+  const w = b.w * b.res
+  const h = b.h * b.res
   return (
-    <>
-      {layers.map((l, li) => (
-        <instancedMesh key={l.code} ref={(r) => void (refs.current[li] = r)} args={[undefined, undefined, BELIEF_CAP]} count={0}>
-          <planeGeometry args={[0.2, 0.2]} />
-          <meshBasicMaterial color={l.color} transparent opacity={l.opacity} depthWrite={false} />
-        </instancedMesh>
-      ))}
-    </>
+    <mesh ref={mesh} position={[w / 2, h / 2, 0.04]} renderOrder={1}>
+      <planeGeometry args={[w, h]} />
+      <meshBasicMaterial map={texture} transparent depthWrite={false} />
+    </mesh>
+  )
+}
+
+/** Judge click tool in 3D: an invisible floor plane; a click on it in Debris/Fire mode places there. */
+function ClickFloor({ mode, onPlace }: { mode: ClickMode | null; onPlace: (x: number, y: number) => void }) {
+  const hello = useSim((s) => s.hello)
+  if (!hello || !mode) return null
+  const m = hello.map
+  const w = m.size[0] * m.resolution
+  const h = m.size[1] * m.resolution
+  return (
+    <mesh
+      position={[w / 2, h / 2, 0.05]}
+      onClick={(e) => {
+        if (e.delta > 6) return // that was a camera drag, not a click
+        e.stopPropagation()
+        // e.point is in three.js world space: (x, z, -y)_sim
+        onPlace(Math.round(e.point.x * 100) / 100, Math.round(-e.point.z * 100) / 100)
+      }}
+    >
+      <planeGeometry args={[w, h]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+    </mesh>
   )
 }
 
@@ -414,9 +436,11 @@ function overviewPose(hello: HelloMsg, cam: THREE.PerspectiveCamera, aspect: num
   const vHalf = THREE.MathUtils.degToRad(cam.fov / 2)
   const hHalf = Math.atan(Math.tan(vHalf) * aspect)
   const dist = Math.max(w / 2 / Math.tan(hHalf), h / 2 / Math.tan(vHalf)) * 1.35 // margin: near edge is magnified
-  // ~70° pitch: steep enough that the near (south) edge doesn't spill out of view.
+  // Wide view: ~70° pitch so the near (south) edge doesn't spill out of view.
+  // Tall view: tilt more (~55°) so the map fills the height instead of floating in the middle.
+  const back = aspect < 1 ? 0.55 : 0.34
   toThree(w / 2, h / 2, 0, target)
-  toThree(w / 2, h / 2 - dist * 0.34, dist * 0.94, pos)
+  toThree(w / 2, h / 2 - dist * back, dist * Math.sqrt(1 - back * back), pos)
 }
 
 /** Where an event happened: its xy, else the involved drone's current position. */
@@ -502,12 +526,23 @@ function CameraRig({ mode }: { mode: CamMode }) {
 
 // ---------------------------------------------------------------- view
 
-export function Scene3D() {
+export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
   const [mode, setMode] = useState<CamMode>('auto')
+  const [clickMode, setClickMode] = useState<ClickMode | null>(null)
+  const hello = useSim((s) => s.hello)
+  const grid = useFreeGrid(hello?.map.grid_url, hello?.map.resolution)
+  const handleCount = useSim((s) => s.state?.click_handles.length ?? 0)
+
+  // Esc leaves click mode.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setClickMode(null)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const drones = useSim((s) => s.hello?.drones ?? NO_DRONES)
   const hasScan = useSim((s) => !!s.hello?.transform)
   return (
-    <div className="scene3d">
+    <div className={`scene3d ${clickMode ? 'click-mode' : ''}`}>
       {/* frameloop="demand" + FrameCap: ~30 fps max, so the 3D view leaves GPU time for Gemma. */}
       <Canvas camera={{ fov: 50, near: 0.1, far: 500, position: [15, 25, 10] }} dpr={[1, 1.5]} frameloop="demand">
         <FrameCap fps={MAX_FPS} />
@@ -516,7 +551,8 @@ export function Scene3D() {
         <directionalLight position={[10, 30, 10]} intensity={0.8} />
         <SimFrame>
           <Environment />
-          <BeliefCells />
+          <BeliefOverlay />
+          <ClickFloor mode={clickMode} onPlace={(x, y) => clickMode && placeClick(send, grid, clickMode, x, y)} />
           <Routes />
           <ClickObjects />
           <SurvivorMarker />
@@ -524,7 +560,31 @@ export function Scene3D() {
         </SimFrame>
         <CameraRig mode={mode} />
       </Canvas>
-      {!hasScan && <div className="scene3d-note">walls extruded from grid.png (no scan.glb)</div>}
+      <div className="click-tool">
+        <button className={clickMode === 'debris' ? 'active' : ''} onClick={() => setClickMode(clickMode === 'debris' ? null : 'debris')}>
+          Debris
+        </button>
+        <button
+          className={clickMode === 'fire' ? 'active fire' : 'fire'}
+          onClick={() => setClickMode(clickMode === 'fire' ? null : 'fire')}
+        >
+          Fire
+        </button>
+        <button onClick={() => undoClick(send)} disabled={handleCount === 0}>
+          Undo{handleCount ? ` (${handleCount})` : ''}
+        </button>
+        {clickMode && <span className="click-hint">click the floor to drop {clickMode} · Esc to cancel</span>}
+      </div>
+      <div className="scene3d-legend">
+        {!hasScan && <span className="muted">no scan.glb: walls from grid.png</span>}
+        {BELIEF_LEGEND.map((l) => (
+          <span key={l.label} style={{ color: l.colour }}>
+            ■ {l.label}
+          </span>
+        ))}
+        <span style={{ color: '#3ddc84' }}>━ route</span>
+        <span style={{ color: '#ff4d4f' }}>┅ old route</span>
+      </div>
       <div className="view-buttons">
         <button className={mode === 'auto' ? 'active' : ''} onClick={() => setMode('auto')} title="Auto-director: cuts to each event">
           Auto

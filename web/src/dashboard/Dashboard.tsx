@@ -1,10 +1,9 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Scene3D } from '../scene3d/Scene3D'
 import { Toasts } from '../ui/Toasts'
 import { useSocket } from '../net/useSocket'
 import { sim, useSim } from '../state/store'
 import { Banners } from './Banners'
-import { BeliefMap } from './BeliefMap'
 import { DronePanel, type DronePanelHandle } from './DronePanel'
 import { TracePanel } from './TracePanel'
 import './dashboard.css'
@@ -12,10 +11,34 @@ import './dashboard.css'
 const DEFAULT_DRONES = ['D1', 'D2', 'D3', 'D4'].map((id) => ({ id, colour: '#8a93a3' }))
 const TEMP_LIMIT_C = 70 // §7.4 retreat threshold
 
-/** Act 1 layout (§10.1, adapted), 1920×1080: map + 3D | 2×2 drone feeds, short trace below. */
+/** Browser full screen for the whole dashboard; also toggled with the F key. */
+function useFullscreen() {
+  const [on, setOn] = useState(() => !!document.fullscreenElement)
+  useEffect(() => {
+    const sync = () => setOn(!!document.fullscreenElement)
+    const onKey = (e: KeyboardEvent) => {
+      const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement
+      if ((e.key === 'f' || e.key === 'F') && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) toggle()
+    }
+    document.addEventListener('fullscreenchange', sync)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('fullscreenchange', sync)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [])
+  return { on, toggle }
+}
+
+function toggle() {
+  if (document.fullscreenElement) void document.exitFullscreen()
+  else void document.documentElement.requestFullscreen()
+}
+
+/** Act 1 layout (§10.1, adapted), 1920×1080: 3D view | 2×2 drone feeds, short trace below. */
 export default function Dashboard() {
   const panels = useRef<(DronePanelHandle | null)[]>([])
-  const [big3d, setBig3d] = useState(true) // 3D view is the big pane by default
+  const fullscreen = useFullscreen()
   const { status, versionMismatch, send } = useSocket({
     onMessage: (msg) => sim.handle(msg),
     onFrame: (f) => panels.current[f.channel - 1]?.showFrame(f.jpeg, f.seq),
@@ -38,19 +61,13 @@ export default function Dashboard() {
           {state && ` · t=${state.t.toFixed(1)} s · ${state.speed}× · act ${state.act}`}
           {state?.phase && ` · ${state.phase}`}
         </span>
+        <button className="fullscreen-btn" onClick={fullscreen.toggle} title="Full screen (F)">
+          {fullscreen.on ? '⤡ Exit full screen' : '⤢ Full screen'}
+        </button>
       </header>
       <main className="act1">
         <section className="map-area">
-          {/* 2D belief map and 3D view share this area; the swap button picks the big one (§10.1). */}
-          <div className={`pane ${big3d ? 'small' : 'big'}`} style={{ order: big3d ? 2 : 1 }}>
-            <BeliefMap send={send} />
-          </div>
-          <div className={`pane ${big3d ? 'big' : 'small'}`} style={{ order: big3d ? 1 : 2 }}>
-            <Scene3D />
-          </div>
-          <button className="swap-btn" onClick={() => setBig3d(!big3d)}>
-            ⇄ {big3d ? 'bigger map' : 'bigger 3D'}
-          </button>
+          <Scene3D send={send} />
         </section>
         <section className="drones">
           {drones.map((d, i) => (

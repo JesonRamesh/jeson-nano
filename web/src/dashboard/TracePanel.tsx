@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TraceRow } from '../contracts'
 import { sim, useSim } from '../state/store'
+import { noEmDash } from '../ui/text'
 
 function fmtValue(v: unknown): string {
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2)
@@ -72,19 +73,19 @@ function Row({ row, colour, open, onToggle }: { row: TraceRow; colour: string; o
           {row.drone}
         </span>
         <span className={`chip action action-${row.action}`}>{row.action}</span>
-        <span className="trace-reason">{row.reason}</span>
+        <span className="trace-reason">{noEmDash(row.reason)}</span>
         {(e.frame_id || e.scan) && <span className="muted evidence-hint">{e.frame_id ? '📷' : '📡'}</span>}
       </div>
       {open && (
         <div className="trace-evidence" onClick={(ev) => ev.stopPropagation()}>
           <div className="evidence-row">
             <span>
-              evidence: <b>{e.sensor}</b> = <span className="mono">{fmtValue(e.value)}</span>
+              evidence: <b>{e.sensor}</b> = <span className="mono">{noEmDash(fmtValue(e.value))}</span>
             </span>
             {e.frame_id && <span className="mono muted">frame {e.frame_id}</span>}
             {det?.gemma?.caption && (
               <span>
-                Gemma: “{det.gemma.caption}”{det.gemma.conf != null && <span className="muted"> · {det.gemma.conf.toFixed(2)}</span>}
+                Gemma: “{noEmDash(det.gemma.caption)}”{det.gemma.conf != null && <span className="muted"> · {det.gemma.conf.toFixed(2)}</span>}
               </span>
             )}
           </div>
