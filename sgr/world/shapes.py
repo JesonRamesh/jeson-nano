@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import math
 
+from sgr import config
+
 # ---------------------------------------------------------------- camera
-CAM_W, CAM_H = 320, 240
-CAM_FOVY_DEG = 90.0
-CAM_TILT_DEG = 15.0  # drone camera looks this far below horizontal
+CAM_W, CAM_H = config.CAM_W, config.CAM_H
+CAM_FOVY_DEG = config.CAM_FOVY_DEG
+CAM_TILT_DEG = -config.CAM_PITCH_DEG  # degrees below horizontal (config pitch is -15)
 
 # ---------------------------------------------------------------- sizes
 WALL_HEIGHT = 2.6
@@ -57,8 +59,13 @@ def _cone_vertices(radius: float, height: float, n: int = 12) -> str:
     return " ".join(f"{x:.4f} {y:.4f} {z:.4f}" for x, y, z in pts)
 
 
-# (name, radius, height) — MuJoCo has no cone primitive, so these are convex meshes
-_CONES = (("cone_tall", 0.26, 1.15), ("cone_mid", 0.22, 0.85), ("cone_short", 0.18, 0.55))
+# Fire cluster scale. 1.35 keeps a fire >= 0.5 % of the frame (detector threshold) out to ~5 m,
+# the coverage range of §8.2. Spec §7.3 allows bigger shapes.
+FIRE_SCALE = 1.35
+
+# (name, radius, height). MuJoCo has no cone primitive, so these are convex meshes.
+_CONES = tuple((n, r * FIRE_SCALE, h * FIRE_SCALE)
+               for n, r, h in (("cone_tall", 0.26, 1.15), ("cone_mid", 0.22, 0.85), ("cone_short", 0.18, 0.55)))
 
 # cone layout of one fire cluster, in the cluster body frame: (mesh, x, y, colour index)
 _FIRE_LAYOUT = (
@@ -94,7 +101,7 @@ def fire_cluster_geoms(prefix: str) -> str:
     out = []
     for i, (mesh, x, y, ci) in enumerate(_FIRE_LAYOUT):
         out.append(
-            f'<geom name="{prefix}_c{i}" type="mesh" mesh="{mesh}" pos="{x} {y} 0" '
+            f'<geom name="{prefix}_c{i}" type="mesh" mesh="{mesh}" pos="{x * FIRE_SCALE:.3f} {y * FIRE_SCALE:.3f} 0" '
             f'material="mat_fire" rgba="{rgba(FIRE_RGBAS[ci])}" group="1" {_VIS}/>'
         )
     return "\n".join(out)

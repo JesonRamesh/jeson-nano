@@ -113,16 +113,17 @@ class FakeWorld:
         return XY(x=x + r * math.cos(a), y=y + r * math.sin(a))
 
     # ---------------------------------------------------------------- change tool
-    def place_debris(self, x: float, y: float) -> Handle | None:
-        if len(self._debris) >= _DEBRIS_POOL or not self._placeable(x, y):
+    def place_debris(self, x: float, y: float, force: bool = False) -> Handle | None:
+        if len(self._debris) >= _DEBRIS_POOL or not (force or self._placeable(x, y)):
             return None
         h = Handle(id=self._new_id("debris"), kind="debris", x=x, y=y)
         self._debris[h.id] = h
         self._rebuild_blocked()
         return h
 
-    def place_fire(self, x: float, y: float) -> Handle | None:
-        if len(self._fires) >= _FIRE_POOL or not self._placeable(x, y):
+    def place_fire(self, x: float, y: float, force: bool = False) -> Handle | None:
+        """force=True skips the click-safety checks (flare-up puts fire on its drone, §7.4)."""
+        if len(self._fires) >= _FIRE_POOL or not (force or self._placeable(x, y)):
             return None
         h = Handle(id=self._new_id("fire"), kind="fire", x=x, y=y)
         self._fires[h.id] = h
