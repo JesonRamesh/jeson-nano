@@ -13,7 +13,7 @@ pytest.importorskip("cv2")
 
 from sgr.perception.detector import FastDetector, detect  # noqa: E402
 from sgr.world import testmap  # noqa: E402
-from sgr.world._compat import load_scenario  # noqa: E402
+from sgr.contracts import Scenario  # noqa: E402
 from sgr.world.world import World  # noqa: E402
 
 from test_world import needs_gl  # noqa: E402
@@ -27,7 +27,7 @@ VIEWS = {"D1": "fire", "D2": "survivor", "D3": "decoy"}
 @pytest.fixture(scope="module")
 def studio(tmp_path_factory):
     d = testmap.write_studio(tmp_path_factory.mktemp("studio"))
-    w = World(d, load_scenario(d / "scenario.json"))
+    w = World(d, Scenario.load(d))
     yield w
     w.close()
 

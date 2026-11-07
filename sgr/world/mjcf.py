@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from sgr import config
+
 from . import shapes
 from .walls import grid_to_boxes, nearest_wall_normal, rect_to_world
 
@@ -20,7 +22,7 @@ N_DEBRIS = 40
 N_FIRE = 30
 PARK_Z = -50.0
 
-DRONE_RADIUS = 0.25
+DRONE_RADIUS = config.DRONE_RADIUS
 DRONE_MASS = 1.0
 DRONE_Z_RANGE = (0.25, 2.5)
 DRONE_KV_LIN = 10.0
@@ -121,11 +123,10 @@ def build_mjcf(free: np.ndarray, res: float, origin, scenario, drone_ids: list[s
         pools.append(shapes.fire_cluster(f"fire{i:02d}", 0.0, 0.0, PARK_Z, mocap=True))
 
     statics = []
-    sv = getattr(scenario, "survivor", None)
-    if sv is not None:
-        statics.append(shapes.survivor("survivor", sv.x, sv.y, getattr(sv, "yaw", 0.0)))
+    sv = scenario.survivor
+    statics.append(shapes.survivor("survivor", sv.x, sv.y, sv.yaw))
     decoy_pose = None
-    dc = getattr(scenario, "decoy", None)
+    dc = scenario.decoy
     if dc is not None:
         hit = nearest_wall_normal(free, dc.x, dc.y, res, origin)
         if hit is not None:

@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import math
 
+from sgr import config
+
 # ---------------------------------------------------------------- camera
-CAM_W, CAM_H = 320, 240
-CAM_FOVY_DEG = 90.0
-CAM_TILT_DEG = 15.0  # drone camera looks this far below horizontal
+CAM_W, CAM_H = config.CAM_W, config.CAM_H
+CAM_FOVY_DEG = config.CAM_FOVY_DEG
+CAM_TILT_DEG = -config.CAM_PITCH_DEG  # degrees below horizontal (config pitch is -15)
 
 # ---------------------------------------------------------------- sizes
 WALL_HEIGHT = 2.6

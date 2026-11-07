@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import pickle
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 import mujoco
@@ -20,7 +21,8 @@ import numpy as np
 from PIL import Image
 
 from . import mjcf, shapes
-from ._compat import XY, CamInfo, GroundTruth, Handle, Pose, Scenario
+from sgr.contracts import XY, CamInfo, Decoy, Fire, GroundTruth, Handle, Pose, Scenario
+
 from .heat import temperature_at
 from .walls import world_to_cell
 
@@ -39,6 +41,14 @@ DEAD_RGBA = (0.08, 0.08, 0.08, 1.0)
 FLICKER = 0.25  # +-fraction of fire colour per tick
 
 
+@dataclass
+class _Placed:
+    handle: Handle
+    slot: int  # mocap pool index
+    scenario: bool  # True = from scenario.json (fires / compromised edges), False = click or flare-up
+    size: float = 1.5  # fire size (ground truth only)
+
+
 def _wrap(a: float) -> float:
     return (a + math.pi) % (2 * math.pi) - math.pi
 
@@ -52,11 +62,11 @@ class World:
         self.map_dir = Path(map_dir)
         self.scenario = scenario
         self.res = float(scenario.grid.resolution)
-        self.origin = tuple(float(v) for v in getattr(scenario.grid, "origin", (0, 0)))
+        self.origin = tuple(float(v) for v in scenario.grid.origin)
         img = np.asarray(Image.open(self.map_dir / scenario.grid.file).convert("L"))
         self.free = img >= 128
         self.grid_h, self.grid_w = self.free.shape
-        self.ambient = float(getattr(getattr(scenario, "heat", None), "ambient_c", 20.0))
+        self.ambient = float(scenario.heat.ambient_c)
         self.drones: list[str] = list(scenario.drones.ids)
 
         xml, self.build_info = mjcf.build_mjcf(self.free, self.res, self.origin, scenario, self.drones)
@@ -94,11 +104,12 @@ class World:
             "fire": [int(m.body_mocapid[m.body(f"fire{i:02d}").id]) for i in range(mjcf.N_FIRE)],
         }
         self._fire_geoms = [np.flatnonzero(m.geom_bodyid == m.body(f"fire{i:02d}").id) for i in range(mjcf.N_FIRE)]
-        self._survivor_xy = (scenario.survivor.x, scenario.survivor.y) if getattr(scenario, "survivor", None) else None
+        self._survivor_xy = (scenario.survivor.x, scenario.survivor.y)
 
         # runtime state (pickled with snapshots)
         self._rng = np.random.default_rng(seed)
-        self._placed: dict[Handle, tuple[float, float]] = {}
+        self._placed: dict[str, _Placed] = {}  # by handle id
+        self._next_id = 0
         self._cmd = {d: np.zeros(4) for d in self.drones}
         self._ff_cmd = (0.0, 0.0, None)
         self._dead: set[str] = set()
@@ -124,17 +135,17 @@ class World:
             q[qa[0]], q[qa[1]], q[qa[2]], q[qa[3]] = float(start[0]), float(start[1]), alt, 0.0
         e = sc.entrance
         fq = self._ff["q"]
-        q[fq[0]], q[fq[1]], q[fq[2]] = float(e.x), float(e.y), float(getattr(e, "yaw", 0.0))
+        q[fq[0]], q[fq[1]], q[fq[2]] = e.x, e.y, e.yaw
         for mid in self._pool_mocap["debris"] + self._pool_mocap["fire"]:
             self.data.mocap_pos[mid] = (0.0, 0.0, mjcf.PARK_Z)
 
     def _place_scenario_objects(self) -> None:
         sc = self.scenario
-        for f in getattr(sc, "fires", None) or []:
-            self.place_fire(f.x, f.y, force=True)
+        for f in sc.fires:
+            self._place("fire", f.x, f.y, True, None, scenario=True, size=f.size)
         nodes = {n.id: n for n in sc.graph.nodes}
         edges = {e.id: e for e in sc.graph.edges}
-        for c in getattr(sc, "compromised", None) or []:
+        for c in sc.compromised:
             e = edges.get(c.edge)
             if e is None or e.a not in nodes or e.b not in nodes:
                 continue
@@ -144,10 +155,10 @@ class World:
             ang = math.atan2(by - ay, bx - ax)
             nx, ny = -math.sin(ang), math.cos(ang)
             size = shapes.DEBRIS_SIZE[0]
-            count = max(1, math.ceil(float(getattr(e, "width", 1.8)) / size))
+            count = max(1, math.ceil(e.width / size))
             for k in range(count):
                 off = (k - (count - 1) / 2) * size
-                self.place_debris(px + off * nx, py + off * ny, force=True, yaw=ang)
+                self._place("debris", px + off * nx, py + off * ny, True, ang, scenario=True)
 
     # ------------------------------------------------------------ sim
     def step(self, n: int) -> None:
@@ -169,10 +180,10 @@ class World:
 
     def _flicker(self) -> None:
         rgba = self.model.geom_rgba
-        for h in self._placed:
-            if h.kind != "fire":
+        for p in self._placed.values():
+            if p.handle.kind != "fire":
                 continue
-            g = self._fire_geoms[h.idx]
+            g = self._fire_geoms[p.slot]
             k = 1.0 + FLICKER * (self._rng.random(len(g)) * 2 - 1)
             rgba[g, :3] = np.clip(self._orig_rgba[g, :3] * k[:, None], 0, 1)
 
@@ -211,7 +222,11 @@ class World:
         return out
 
     def fires_xy(self) -> list[tuple[float, float]]:
-        return [xy for h, xy in self._placed.items() if h.kind == "fire"]
+        return [(p.handle.x, p.handle.y) for p in self._placed.values() if p.handle.kind == "fire"]
+
+    def placed_handles(self, kind: str | None = None) -> list[Handle]:
+        """Everything placed from the pools, scenario objects included (debug/tests)."""
+        return [p.handle for p in self._placed.values() if kind is None or p.handle.kind == kind]
 
     def temperature(self, drone: str) -> float:
         p = self.drone_pose(drone)
@@ -222,13 +237,15 @@ class World:
 
     # ------------------------------------------------------------ cameras
     def cam_info(self, drone: str) -> CamInfo:
+        """Intrinsics + camera pose (camera centre, drone yaw). pixel_to_world does the exact ray."""
         cid = self._d[drone]["cam"]
         fx, fy, cx, cy = shapes.cam_intrinsics()
+        x, y, z = (float(v) for v in self.data.cam_xpos[cid])
         return CamInfo(
-            drone=drone, width=shapes.CAM_W, height=shapes.CAM_H, fx=fx, fy=fy, cx=cx, cy=cy,
-            fovy_deg=shapes.CAM_FOVY_DEG,
-            pos=tuple(float(v) for v in self.data.cam_xpos[cid]),
-            rot=tuple(float(v) for v in self.data.cam_xmat[cid]),
+            width=shapes.CAM_W, height=shapes.CAM_H, fovy_deg=shapes.CAM_FOVY_DEG,
+            fx=fx, fy=fy, cx=cx, cy=cy,
+            pose=Pose(x=x, y=y, z=z, yaw=self.drone_pose(drone).yaw),
+            pitch_deg=-shapes.CAM_TILT_DEG,
         )
 
     def render_drone(self, drone: str) -> tuple[np.ndarray, CamInfo]:
@@ -279,10 +296,11 @@ class World:
             pts.append(self._survivor_xy)
         return any(math.hypot(x - px, y - py) < SAFE_DIST for px, py in pts)
 
-    def _place(self, kind: str, x: float, y: float, force: bool, yaw: float | None) -> Handle | None:
+    def _place(self, kind: str, x: float, y: float, force: bool, yaw: float | None,
+               scenario: bool = False, size: float = 1.5) -> Handle | None:
         if not force and (not self._is_free(x, y) or self._too_close(x, y)):
             return None
-        used = {h.idx for h in self._placed if h.kind == kind}
+        used = {p.slot for p in self._placed.values() if p.handle.kind == kind}
         slot = next((i for i in range(len(self._pool_mocap[kind])) if i not in used), None)
         if slot is None:
             return None
@@ -293,8 +311,9 @@ class World:
         mid = self._pool_mocap[kind][slot]
         self.data.mocap_pos[mid] = (x, y, 0.0)
         self.data.mocap_quat[mid] = _yaw_quat(yaw)
-        h = Handle(kind=kind, idx=slot)
-        self._placed[h] = (float(x), float(y))
+        self._next_id += 1
+        h = Handle(id=f"{kind}-{self._next_id}", kind=kind, x=float(x), y=float(y))
+        self._placed[h.id] = _Placed(h, slot, scenario, size)
         mujoco.mj_forward(self.model, self.data)
         return h
 
@@ -307,12 +326,12 @@ class World:
         return self._place("fire", x, y, force, None)
 
     def remove(self, h: Handle) -> None:
-        if h not in self._placed:
+        p = self._placed.pop(h.id, None)
+        if p is None:
             return
-        del self._placed[h]
-        self.data.mocap_pos[self._pool_mocap[h.kind][h.idx]] = (0.0, 0.0, mjcf.PARK_Z)
+        self.data.mocap_pos[self._pool_mocap[h.kind][p.slot]] = (0.0, 0.0, mjcf.PARK_Z)
         if h.kind == "fire":
-            g = self._fire_geoms[h.idx]
+            g = self._fire_geoms[p.slot]
             self.model.geom_rgba[g] = self._orig_rgba[g]
         mujoco.mj_forward(self.model, self.data)
 
@@ -361,11 +380,14 @@ class World:
         """ONLY for mock perception and the mission summary. Never from sgr/swarm or sgr/guidance."""
         sc = self.scenario
         dp = self.build_info.decoy_pose
+        placed = list(self._placed.values())
         return GroundTruth(
-            fires=[XY(x=x, y=y) for x, y in self.fires_xy()],
-            debris=[XY(x=x, y=y) for h, (x, y) in self._placed.items() if h.kind == "debris"],
-            survivor=XY(x=sc.survivor.x, y=sc.survivor.y) if getattr(sc, "survivor", None) else None,
-            decoy=XY(x=dp[0], y=dp[1]) if dp else None,
+            fires=[Fire(x=p.handle.x, y=p.handle.y, size=p.size) for p in placed if p.handle.kind == "fire"],
+            survivor=sc.survivor,
+            # the panel as actually mounted on the nearest wall face
+            decoy=Decoy(x=dp[0], y=dp[1], kind=sc.decoy.kind) if (dp and sc.decoy) else None,
+            debris=[p.handle for p in placed if p.handle.kind == "debris" and not p.scenario],  # clicks only
+            compromised=list(sc.compromised),
             dead_drones=sorted(self._dead),
         )
 
@@ -374,7 +396,8 @@ class World:
         st = np.empty(mujoco.mj_stateSize(self.model, sig))
         mujoco.mj_getState(self.model, self.data, st, sig)
         rt = {
-            "placed": dict(self._placed),
+            "placed": [(p.handle.model_dump(), p.slot, p.scenario, p.size) for p in self._placed.values()],
+            "next_id": self._next_id,
             "cmd": {k: v.copy() for k, v in self._cmd.items()},
             "ff_cmd": self._ff_cmd,
             "dead": set(self._dead),
@@ -386,7 +409,8 @@ class World:
         blob = pickle.loads(b)
         mujoco.mj_setState(self.model, self.data, blob["mj"], mujoco.mjtState.mjSTATE_INTEGRATION)
         rt = blob["rt"]
-        self._placed = dict(rt["placed"])
+        self._placed = {h["id"]: _Placed(Handle(**h), slot, scen, size) for h, slot, scen, size in rt["placed"]}
+        self._next_id = rt["next_id"]
         self._cmd = {k: np.array(v) for k, v in rt["cmd"].items()}
         self._ff_cmd = tuple(rt["ff_cmd"])
         self._dead = set(rt["dead"])

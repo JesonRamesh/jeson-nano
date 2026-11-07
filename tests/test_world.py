@@ -11,7 +11,7 @@ import pytest
 mujoco = pytest.importorskip("mujoco")
 
 from sgr.world import mjcf, testmap  # noqa: E402
-from sgr.world._compat import load_scenario  # noqa: E402
+from sgr.contracts import Scenario  # noqa: E402
 from sgr.world.walls import grid_to_boxes  # noqa: E402
 from sgr.world.world import LIDAR_RANGE, World  # noqa: E402
 
@@ -36,7 +36,7 @@ def map_dir(tmp_path_factory):
 
 @pytest.fixture
 def world(map_dir):
-    w = World(map_dir, load_scenario(map_dir / "scenario.json"))
+    w = World(map_dir, Scenario.load(map_dir))
     yield w
     w.close()
 
@@ -112,8 +112,8 @@ def test_debris_seen_then_removed(world):
 
 def test_compromised_edge_has_debris(world):
     gt = world.ground_truth()
-    assert len(gt.debris) == 2  # ceil(1.8 / 1.0) blocks across e9 at (24, 8)
-    for d in gt.debris:
+    assert len(world.placed_handles("debris")) == 2  # ceil(1.8 / 1.0) blocks across e9 at (24, 8)
+    for d in world.placed_handles("debris"):
         assert math.hypot(d.x - 24.0, d.y - 8.0) < 1.0
 
 
@@ -125,7 +125,7 @@ def test_place_refusals(world):
     # fill the pool, then one more is refused
     while world.place_debris(16.0, 10.0, force=True) is not None:
         pass
-    assert len(world.ground_truth().debris) == mjcf.N_DEBRIS
+    assert len(world.placed_handles("debris")) == mjcf.N_DEBRIS
     assert world.place_debris(16.0, 12.0) is None
 
 
@@ -159,7 +159,7 @@ def test_state_roundtrip_is_deterministic(world):
 
     world.set_state(s)
     assert world.alive("D2")
-    assert h not in world._placed
+    assert h.id not in world._placed
     world.set_drone_cmd("D1", 0.8, 0.2, 0.0, 0.5)
     world.step(100)
     b = world.drone_pose("D1")
