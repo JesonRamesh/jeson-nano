@@ -65,23 +65,34 @@ def _scan_vis_xml(obj: str, png: str) -> tuple[str, str]:
 
 
 def _drone(name: str, rgba) -> str:
+    """Quadcopter look for the camera feeds; physics is the same 0.25 m collision sphere (group 3 = not drawn)."""
     c = shapes.rgba(rgba)
     r = DRONE_RADIUS
-    rotors = []
+    vis = 'group="2" contype="0" conaffinity="0" mass="0.001"'
+    arm, dark, prop = 0.16, "0.12 0.12 0.13 1", "0.08 0.08 0.09 0.35"
+    parts = [
+        f'<geom name="{name}_hull" type="box" size="0.085 0.06 0.03" rgba="{c}" {vis}/>',
+        f'<geom name="{name}_canopy" type="ellipsoid" size="0.06 0.045 0.03" pos="0.01 0 0.03" rgba="{c}" {vis}/>',
+        f'<geom name="{name}_gimbal" type="sphere" size="0.025" pos="0.07 0 -0.035" rgba="{dark}" {vis}/>',
+        f'<geom name="{name}_led" type="sphere" size="0.012" pos="-0.08 0 0.035" rgba="{c}" material="mat_fire" {vis}/>',
+    ]
     for i, (sx, sy) in enumerate(((1, 1), (1, -1), (-1, 1), (-1, -1))):
-        rotors.append(
-            f'<geom name="{name}_rotor{i}" type="cylinder" size="0.10 0.012" '
-            f'pos="{sx * 0.21} {sy * 0.21} 0.06" mass="0.01" rgba="0.15 0.15 0.15 1" '
-            f'group="2" contype="0" conaffinity="0"/>'
-        )
+        x, y = sx * arm, sy * arm
+        parts += [
+            f'<geom name="{name}_arm{i}" type="capsule" fromto="0 0 0.005 {x} {y} 0.005" size="0.012" rgba="{dark}" {vis}/>',
+            f'<geom name="{name}_motor{i}" type="cylinder" size="0.022 0.018" pos="{x} {y} 0.02" rgba="{dark}" {vis}/>',
+            f'<geom name="{name}_rotor{i}" type="cylinder" size="0.085 0.003" pos="{x} {y} 0.042" rgba="{prop}" {vis}/>',
+            f'<geom name="{name}_leg{i}" type="capsule" fromto="{x * 0.5} {y * 0.5} -0.02 {x * 0.55} {y * 0.55} -0.075" '
+            f'size="0.006" rgba="{dark}" {vis}/>',
+        ]
     lo, hi = DRONE_Z_RANGE
     return f"""<body name="{name}" gravcomp="1">
 <joint name="{name}_x" type="slide" axis="1 0 0"/>
 <joint name="{name}_y" type="slide" axis="0 1 0"/>
 <joint name="{name}_z" type="slide" axis="0 0 1" limited="true" range="{lo} {hi}"/>
 <joint name="{name}_yaw" type="hinge" axis="0 0 1"/>
-<geom name="{name}_body" type="sphere" size="{r}" mass="{DRONE_MASS}" rgba="{c}" group="2" contype="2" conaffinity="1"/>
-{chr(10).join(rotors)}
+<geom name="{name}_body" type="sphere" size="{r}" mass="{DRONE_MASS}" rgba="{c}" group="3" contype="2" conaffinity="1"/>
+{chr(10).join(parts)}
 <camera name="{name}_cam" pos="{CAM_FORWARD} 0 0" fovy="{shapes.CAM_FOVY_DEG}" xyaxes="{shapes.camera_xyaxes(0.0)}"/>
 </body>"""
 
