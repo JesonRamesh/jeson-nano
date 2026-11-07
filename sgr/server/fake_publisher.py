@@ -107,8 +107,9 @@ def run(bus: Bus, scenario: Scenario, stop: threading.Event, fps: float = 10.0) 
         while script_i < len(_SCRIPT) and t >= _SCRIPT[script_i][0]:
             st, d, action, reason, sensor, value = _SCRIPT[script_i]
             fid = f"{d}-{seq}" if d != "swarm" else None
+            scan = [1.1 if k in (0, 1, 35) else 4.8 for k in range(config.LIDAR_RAYS)] if sensor == "lidar" else None
             bus.publish(TraceMsg(id=f"tr{seq}-{script_i}", t=st, drone=d, action=action, reason=reason,
-                                 evidence=Evidence(sensor=sensor, value=value, frame_id=fid)))
+                                 evidence=Evidence(sensor=sensor, value=value, frame_id=fid, scan=scan)))
             if action == "INSPECT":
                 bus.publish(DetectionMsg(drone=d, frame_id=fid, status="low_conf",
                                          boxes=[Box(x=120, y=80, w=60, h=70, label="fire", score=0.62)],

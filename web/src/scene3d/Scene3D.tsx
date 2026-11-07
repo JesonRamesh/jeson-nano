@@ -3,7 +3,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Component, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
-import type { Handle, Transform } from '../contracts'
+import type { EventMsg, Handle, HelloMsg, Transform } from '../contracts'
 import { useFreeGrid, type FreeGrid } from '../state/grid'
 import { CELL_CODE, sim, useSim } from '../state/store'
 import { DEBRIS_SIZE } from './constants'
@@ -18,7 +18,7 @@ const WALL_H = 2.6
 const BELIEF_CAP = 4000 // max instanced belief cells per layer
 const NO_DRONES: { id: string; colour: string }[] = []
 
-type CamMode = 'overview' | 'free' | string // string = drone id (chase)
+type CamMode = 'auto' | 'overview' | 'free' | string // string = drone id (chase)
 
 function SimFrame({ children }: { children: ReactNode }) {
   return <group rotation={[-Math.PI / 2, 0, 0]}>{children}</group>
@@ -306,46 +306,96 @@ function SurvivorMarker() {
 
 const tmpTarget = new THREE.Vector3()
 const tmpPos = new THREE.Vector3()
+const DIRECTOR_HOLD_S = 6 // how long the auto-director stays on an event
+const FOCUS_BACK = 7 // m south of the focus point
+const FOCUS_UP = 10 // m above it (keeps nearby walls from blocking the view)
 
 /** sim (x, y, z) -> three.js world position (matches <SimFrame>). */
 const toThree = (x: number, y: number, z: number, out: THREE.Vector3) => out.set(x, z, -y)
 
+/** Where the camera should be for the whole-map overview, in three.js coordinates. */
+function overviewPose(hello: HelloMsg, cam: THREE.PerspectiveCamera, aspect: number, pos: THREE.Vector3, target: THREE.Vector3) {
+  const m = hello.map
+  const w = m.size[0] * m.resolution
+  const h = m.size[1] * m.resolution
+  // Distance that fits the whole map in the view (both axes), with some margin.
+  const vHalf = THREE.MathUtils.degToRad(cam.fov / 2)
+  const hHalf = Math.atan(Math.tan(vHalf) * aspect)
+  const dist = Math.max(w / 2 / Math.tan(hHalf), h / 2 / Math.tan(vHalf)) * 1.35 // margin: near edge is magnified
+  // ~70° pitch: steep enough that the near (south) edge doesn't spill out of view.
+  toThree(w / 2, h / 2, 0, target)
+  toThree(w / 2, h / 2 - dist * 0.34, dist * 0.94, pos)
+}
+
+/** Where an event happened: its xy, else the involved drone's current position. */
+function eventFocus(e: EventMsg): [number, number] | null {
+  if (e.xy) return e.xy
+  const d = e.drone ? sim.snap.state?.drones.find((x) => x.id === e.drone) : undefined
+  return d ? [d.x, d.y] : null
+}
+
+/**
+ * Camera modes:
+ *  - auto (default): the "auto-director". Sits on the overview; on each event
+ *    with a place (xy or drone) it glides to that spot, holds 6 s, glides back.
+ *  - overview / free: orbit controls (overview resets the pose first).
+ *  - D1..D4: chase camera behind that drone.
+ */
 function CameraRig({ mode }: { mode: CamMode }) {
   const controls = useRef<OrbitControlsImpl>(null)
   const { camera, size } = useThree()
   const hello = useSim((s) => s.hello)
+  const focus = useRef<{ seq: number; until: number; drone: string | null; xy: [number, number] | null } | null>(null)
+  const lastSeq = useRef(0)
 
-  // Overview: look down at the map centre from the south, ~55° pitch.
+  // Overview button: jump to the overview pose, then let the user orbit.
   useEffect(() => {
     if (!hello || mode !== 'overview') return
-    const m = hello.map
-    const w = m.size[0] * m.resolution
-    const h = m.size[1] * m.resolution
-    // Distance that fits the whole map in the view (both axes), with some margin.
-    const vHalf = THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov / 2)
-    const hHalf = Math.atan(Math.tan(vHalf) * (size.width / Math.max(1, size.height)))
-    const dist = Math.max(w / 2 / Math.tan(hHalf), h / 2 / Math.tan(vHalf)) * 1.15
-    // ~70° pitch: steep enough that the near (south) edge doesn't spill out of view.
-    toThree(w / 2, h / 2, 0, tmpTarget)
-    toThree(w / 2, h / 2 - dist * 0.34, dist * 0.94, tmpPos)
+    overviewPose(hello, camera as THREE.PerspectiveCamera, size.width / Math.max(1, size.height), tmpPos, tmpTarget)
     camera.position.copy(tmpPos)
     controls.current?.target.copy(tmpTarget)
     controls.current?.update()
   }, [mode, hello, camera, size.width, size.height])
 
-  // Chase: 2.5 m behind and 3 m above the drone (clear of the 2.6 m walls), looking ahead.
-  useFrame((_, dt) => {
+  useFrame(({ clock }, dt) => {
     if (mode === 'overview' || mode === 'free') return
-    const d = sim.snap.state?.drones.find((x) => x.id === mode)
-    if (!d) return
-    const k = 1 - Math.exp(-dt * 4)
-    toThree(d.x - 2.5 * Math.cos(d.yaw), d.y - 2.5 * Math.sin(d.yaw), d.z + 3, tmpPos)
-    toThree(d.x + 2.5 * Math.cos(d.yaw), d.y + 2.5 * Math.sin(d.yaw), 0, tmpTarget)
-    camera.position.lerp(tmpPos, k)
-    if (controls.current) {
-      controls.current.target.lerp(tmpTarget, k)
-      controls.current.update()
+    const ctl = controls.current
+    let k = 1 - Math.exp(-dt * 4)
+
+    if (mode === 'auto') {
+      if (!hello) return
+      // New event? Take the newest one that has a place.
+      const evs = sim.snap.events
+      const newest = evs[evs.length - 1]
+      if (newest && newest.seq !== lastSeq.current) {
+        lastSeq.current = newest.seq
+        const xy = eventFocus(newest.msg)
+        if (xy) focus.current = { seq: newest.seq, until: clock.elapsedTime + DIRECTOR_HOLD_S, drone: newest.msg.xy ? null : (newest.msg.drone ?? null), xy }
+      }
+      const f = focus.current
+      if (f && clock.elapsedTime < f.until) {
+        // Follow a drone while it moves; a fixed xy stays put.
+        const d = f.drone ? sim.snap.state?.drones.find((x) => x.id === f.drone) : undefined
+        const [fx, fy] = d ? [d.x, d.y] : f.xy!
+        toThree(fx, fy, 0, tmpTarget)
+        toThree(fx, fy - FOCUS_BACK, FOCUS_UP, tmpPos)
+      } else {
+        focus.current = null
+        overviewPose(hello, camera as THREE.PerspectiveCamera, size.width / Math.max(1, size.height), tmpPos, tmpTarget)
+      }
+      k = 1 - Math.exp(-dt * 2.2) // slower, cinematic glide
+    } else {
+      // Chase: 2.5 m behind and 3 m above the drone (clear of the 2.6 m walls), looking ahead.
+      const d = sim.snap.state?.drones.find((x) => x.id === mode)
+      if (!d) return
+      toThree(d.x - 2.5 * Math.cos(d.yaw), d.y - 2.5 * Math.sin(d.yaw), d.z + 3, tmpPos)
+      toThree(d.x + 2.5 * Math.cos(d.yaw), d.y + 2.5 * Math.sin(d.yaw), 0, tmpTarget)
     }
+    camera.position.lerp(tmpPos, k)
+    if (ctl) {
+      ctl.target.lerp(tmpTarget, k)
+      ctl.update()
+    } else camera.lookAt(tmpTarget)
   })
 
   return <OrbitControls ref={controls} makeDefault enableDamping enabled={mode === 'overview' || mode === 'free'} />
@@ -354,7 +404,7 @@ function CameraRig({ mode }: { mode: CamMode }) {
 // ---------------------------------------------------------------- view
 
 export function Scene3D() {
-  const [mode, setMode] = useState<CamMode>('overview')
+  const [mode, setMode] = useState<CamMode>('auto')
   const drones = useSim((s) => s.hello?.drones ?? NO_DRONES)
   const hasScan = useSim((s) => !!s.hello?.transform)
   return (
@@ -375,6 +425,9 @@ export function Scene3D() {
       </Canvas>
       {!hasScan && <div className="scene3d-note">walls extruded from grid.png (no scan.glb)</div>}
       <div className="view-buttons">
+        <button className={mode === 'auto' ? 'active' : ''} onClick={() => setMode('auto')} title="Auto-director: cuts to each event">
+          Auto
+        </button>
         <button className={mode === 'overview' ? 'active' : ''} onClick={() => setMode('overview')}>
           Overview
         </button>

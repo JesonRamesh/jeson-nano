@@ -3,6 +3,7 @@ import { Scene3D } from '../scene3d/Scene3D'
 import { Toasts } from '../ui/Toasts'
 import { useSocket } from '../net/useSocket'
 import { sim, useSim } from '../state/store'
+import { Banners } from './Banners'
 import { BeliefMap } from './BeliefMap'
 import { BudgetPanel } from './BudgetPanel'
 import { DronePanel, type DronePanelHandle } from './DronePanel'
@@ -28,6 +29,7 @@ export default function Dashboard() {
   return (
     <div className="dash">
       <Toasts />
+      <Banners />
       <header className="topbar">
         <strong>Swarm-Guided Rescue</strong>
         <span className={`conn conn-${status}`}>● {status}</span>
