@@ -11,6 +11,7 @@ on the main thread), so headless runs never open a GL context.
 from __future__ import annotations
 
 import math
+import os
 import pickle
 import zlib
 import threading
@@ -62,7 +63,11 @@ def _yaw_quat(yaw: float) -> np.ndarray:
 
 
 class World:
-    def __init__(self, map_dir: Path, scenario: Scenario, seed: int = 0):
+    def __init__(self, map_dir: Path, scenario: Scenario, seed: int = 0, scan_vis: bool | None = None):
+        """scan_vis: show W's textured scan replica (maps/<name>/scan_vis.obj + .png) in the drone cameras.
+        None = on when the map has the files, unless SGR_SCAN_VIS=0. Physics, LiDAR and line of sight always
+        use the box walls; the replica is visual only (it doesn't change the physics state, so snapshots
+        made with and without it are interchangeable)."""
         self.map_dir = Path(map_dir)
         self.scenario = scenario
         self.res = float(scenario.grid.resolution)
@@ -73,7 +78,11 @@ class World:
         self.ambient = float(scenario.heat.ambient_c)
         self.drones: list[str] = list(scenario.drones.ids)
 
-        xml, self.build_info = mjcf.build_mjcf(self.free, self.res, self.origin, scenario, self.drones)
+        if scan_vis is None:
+            scan_vis = os.environ.get("SGR_SCAN_VIS", "1").lower() not in ("0", "false", "off", "no")
+        obj, png = self.map_dir / "scan_vis.obj", self.map_dir / "scan_vis.png"
+        vis = (obj.resolve().as_posix(), png.resolve().as_posix()) if scan_vis and obj.is_file() and png.is_file() else None
+        xml, self.build_info = mjcf.build_mjcf(self.free, self.res, self.origin, scenario, self.drones, scan_vis=vis)
         self.model = mujoco.MjModel.from_xml_string(xml)
         self.data = mujoco.MjData(self.model)
         m = self.model
@@ -104,6 +113,11 @@ class World:
             "act": [m.actuator(f"FF_{a}").id for a in ("vx", "vy", "wz")],
         }
         self._orig_gravcomp = m.body_gravcomp.copy()
+        if self.build_info.scan_vis:  # the replica replaces the plain walls + floor in the cameras only
+            for g in range(m.ngeom):
+                name = m.geom(g).name
+                if name.startswith("wall") or name == "floor":
+                    m.geom_rgba[g, 3] = 0.0  # not drawn; mj_ray (LiDAR, LOS) still hits them
         self._orig_rgba = m.geom_rgba.copy()
 
         # mocap pools
