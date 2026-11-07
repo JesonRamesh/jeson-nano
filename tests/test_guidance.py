@@ -1,0 +1,212 @@
+"""Guidance tests (P): §9 rules on a scripted SwarmState."""
+
+from __future__ import annotations
+
+import math
+
+import pytest
+
+from sgr.contracts import (
+    Checkpoint,
+    Entrance,
+    Graph,
+    GraphEdge,
+    GraphNode,
+    Pose,
+    PriorMap,
+    Route,
+    SurvivorState,
+    SwarmState,
+)
+from sgr.guidance import Guidance
+from sgr.guidance.geometry import point_at, project
+
+ROUTE = [(2.0, 3.0), (16.0, 3.0), (16.0, 15.0)]  # 26 m, one turn at (16, 3)
+
+
+class StubWorld:
+    def __init__(self, poses):
+        self.poses = dict(poses)
+        self.pushed = 0
+
+    def drone_pose(self, d):
+        x, y = self.poses[d]
+        return Pose(x=x, y=y, z=1.6, yaw=0.0)
+
+    def push_ff_back(self):
+        self.pushed += 1
+
+
+def _swarm(t=0.0, version=1, status="ok", points=ROUTE, delta=(), survivor=None) -> SwarmState:
+    return SwarmState(
+        t=t, route=Route(points=list(points), status=status, version=version),
+        checkpoints=[Checkpoint(x=16.0, y=3.0, drone="D2")], lead="D1", chain_formed=True,
+        map_delta=list(delta), survivor=survivor,
+    )
+
+
+def _prior() -> PriorMap:
+    nodes = [GraphNode(id="n1", x=2, y=3, kind="entrance"), GraphNode(id="n2", x=16, y=3, kind="junction"),
+             GraphNode(id="n3", x=16, y=15, kind="room"), GraphNode(id="n4", x=26, y=3, kind="junction")]
+    edges = [GraphEdge(id="e1", a="n1", b="n2"), GraphEdge(id="e2", a="n2", b="n3"),
+             GraphEdge(id="e3", a="n2", b="n4")]
+    return PriorMap(name="t", resolution=0.1, origin=(0, 0), size=(300, 200), entrance=Entrance(x=2, y=3),
+                    graph=Graph(nodes=nodes, edges=edges), drone_ids=["D1", "D2", "D3", "D4"], altitude=1.6)
+
+
+def _run(g: Guidance, ff: Pose, seconds: float, t0: float = 0.0, **sw):
+    msg = None
+    for k in range(int(round(seconds / 0.1)) + 1):
+        msg, cmds = g.tick(t0 + k * 0.1, ff, _swarm(t=t0 + k * 0.1, **sw))
+    return msg, cmds
+
+
+# ------------------------------------------------------------------ geometry
+def test_projection_and_side():
+    pr = project(ROUTE, (8.0, 5.0))
+    assert pr.s == pytest.approx(6.0) and pr.dist == pytest.approx(2.0) and pr.side > 0  # left of travel
+    assert project(ROUTE, (17.0, 10.0)).side < 0  # east of the northbound leg = right of travel
+    assert point_at(ROUTE, 20.0) == pytest.approx((16.0, 9.0))
+
+
+# ------------------------------------------------------------------ rules
+def test_on_route_go_says_once():
+    g = Guidance()
+    m1, _ = g.tick(0.0, Pose(x=4, y=3, yaw=0.0), _swarm())
+    m2, _ = g.tick(0.1, Pose(x=4, y=3, yaw=0.0), _swarm())
+    assert m1.severity == "info" and m1.say == m1.subtitle and m2.say is None
+    assert m1.distance == pytest.approx(24.0) and abs(m1.arrow_deg) < 1.0
+
+
+def test_arrow_points_round_the_corner():
+    m, _ = Guidance().tick(0.0, Pose(x=15, y=3, yaw=0.0), _swarm())
+    assert 45 < m.arrow_deg < 90  # target 3 m ahead is north-east: turn left
+
+
+def test_drift_after_two_seconds():
+    g = Guidance()
+    m, _ = _run(g, Pose(x=8, y=5.5, yaw=0.0), 1.5)
+    assert m.subtitle.startswith("Follow")
+    m, _ = _run(g, Pose(x=8, y=5.5, yaw=0.0), 1.0, t0=1.6)
+    assert m.subtitle == "Bear right." and m.severity == "warn"
+    assert g.corrections == 1
+
+
+def test_wrong_heading():
+    g = Guidance()
+    m, _ = _run(g, Pose(x=8, y=3, yaw=math.pi), 2.1)
+    assert m.subtitle == "Wrong way. Turn around."
+
+
+def test_wrong_branch_edge():
+    g = Guidance(prior=_prior())
+    m, _ = _run(g, Pose(x=20, y=3, yaw=math.pi), 2.1)  # on e3 (off route), even facing back
+    assert m.subtitle == "Wrong way. Turn around."
+
+
+def test_junction_is_not_wrong_way():
+    g = Guidance(prior=_prior())
+    m, _ = _run(g, Pose(x=16.3, y=3.4, yaw=math.pi / 2), 3.0)  # standing in the junction, facing the route
+    assert m.subtitle.startswith("Follow")
+
+
+def test_danger_near_fire_and_push_back_inside():
+    w = StubWorld({"D1": (6, 3), "D2": (16, 3)})
+    g = Guidance(world=w)
+    fire = [(30, 15, "fire")]  # 0.2 m cell centred at (6.1, 3.1)
+    m, _ = g.tick(0.0, Pose(x=5.4, y=3.0, yaw=0.0), _swarm(delta=fire))
+    assert m.severity == "danger" and m.alarm and m.say == "Stop. Fire ahead. Turn back."
+    assert w.pushed == 0
+    m, _ = g.tick(0.1, Pose(x=6.1, y=3.1, yaw=0.0), _swarm())  # the hazard is remembered
+    assert m.alarm and w.pushed == 1
+
+
+def test_no_route():
+    m, _ = Guidance().tick(0.0, Pose(x=4, y=3), _swarm(status="none", points=[]))
+    assert m.subtitle == "No safe route. Holding."
+
+
+def test_route_replaced_under_firefighter():
+    g = Guidance()
+    _run(g, Pose(x=6, y=3, yaw=0.0), 1.0)
+    new = [(2.0, 3.0), (6.0, 3.0), (6.0, 15.0), (16.0, 15.0)]
+    m, _ = g.tick(1.1, Pose(x=6, y=3, yaw=0.0), _swarm(t=1.1, version=2, points=new))
+    assert m.subtitle == "Stop. Route blocked." and m.alarm and m.say
+    m, _ = _run(g, Pose(x=6, y=3, yaw=math.pi / 2), 1.0, t0=3.2, version=2, points=new)
+    assert m.subtitle == "New route. Follow me."
+    m, _ = _run(g, Pose(x=6, y=3, yaw=math.pi / 2), 0.5, t0=7.5, version=2, points=new)
+    assert m.subtitle.startswith("Follow the drone")
+
+
+def test_mission_complete_logs_trace():
+    g = Guidance()
+    sv = SurvivorState(status="confirmed", x=16.0, y=15.0, conf=0.9)
+    m, _ = g.tick(0.0, Pose(x=16, y=14, yaw=math.pi / 2), _swarm(survivor=sv))
+    assert m.subtitle == "Survivor reached. Mission complete." and g.complete
+    rows = g.drain_trace()
+    assert [r.action for r in rows] == ["MISSION_COMPLETE"] and rows[0].evidence.value["ff"] == [16.0, 14.0]
+
+
+def test_corrections_are_traced_with_evidence():
+    g = Guidance()
+    _run(g, Pose(x=8, y=5.5, yaw=0.0), 2.5)
+    rows = g.drain_trace()
+    assert [r.action for r in rows] == ["FF_CORRECTION"]
+    assert rows[0].evidence.sensor == "planner" and rows[0].evidence.value["rule"] == "drift"
+
+
+# ------------------------------------------------------------------ lead + handover
+def test_lead_moves_ahead_of_firefighter():
+    w = StubWorld({"D1": (3.0, 3.0), "D2": (16, 3)})
+    _, cmds = Guidance(world=w).tick(0.0, Pose(x=2.5, y=3, yaw=0.0), _swarm())
+    c = cmds["D1"]
+    assert c.vx > 0.5 and abs(c.vy) < 0.1 and math.hypot(c.vx, c.vy) <= 1.2 + 1e-9
+
+
+def test_lead_waits_when_firefighter_falls_behind():
+    w = StubWorld({"D1": (12.0, 3.0), "D2": (16, 3)})
+    m, cmds = Guidance(world=w).tick(0.0, Pose(x=3.0, y=3, yaw=0.0), _swarm())
+    assert cmds["D1"].vx == 0 and cmds["D1"].vy == 0
+    assert m.subtitle == "Follow me." and abs(m.arrow_deg) < 1.0  # arrow points at the waiting lead
+
+
+def test_handover_to_next_chain_drone():
+    w = StubWorld({"D1": (17.0, 6.0), "D2": (16.0, 3.5)})
+    g = Guidance(world=w)
+    g.tick(0.0, Pose(x=15.0, y=3.0, yaw=0.0), _swarm())
+    assert g.lead == "D2"
+
+
+def test_hazards_survive_snapshot():
+    g = Guidance()
+    g.observe(_swarm(delta=[(30, 15, "fire")]))  # seen during Act 1
+    h = Guidance()
+    h.set_state(g.get_state())
+    m, _ = h.tick(0.0, Pose(x=5.6, y=3.0, yaw=0.0), _swarm())
+    assert m.severity == "danger"
+
+
+def test_cleared_hazard_is_forgotten():
+    g = Guidance()
+    g.observe(_swarm(delta=[(30, 15, "fire")]))
+    g.observe(_swarm(delta=[(30, 15, "free")]))
+    m, _ = g.tick(0.0, Pose(x=5.6, y=3.0, yaw=0.0), _swarm())
+    assert m.severity == "info"
+
+
+# ------------------------------------------------------------------ with the real World
+def test_walking_into_fire_pushes_real_firefighter_back(tmp_path):
+    pytest.importorskip("mujoco")
+    from sgr.contracts import Scenario
+    from sgr.world import testmap
+    from sgr.world.world import World
+
+    d = testmap.write(tmp_path / "map")
+    w = World(d, Scenario.load(d))
+    w.set_ff_input(1.0, 0.0, 0.0)
+    w.step(400)  # walk 2 s east along the corridor
+    f0 = w.ff_pose()
+    i, j = int(f0.x / 0.2), int(f0.y / 0.2)
+    g = Guidance(world=w)
+    m, _ = g.tick(0.0, f0, _swarm(delta=[(i, j, "fire")]))
+    assert m.alarm and w.ff_pose().x < f0.x - 0.4  # pushed back against its direction of travel
