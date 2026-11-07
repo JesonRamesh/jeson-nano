@@ -52,7 +52,7 @@ def cost_map(belief: BeliefGrid) -> CostMap:
     return cm
 
 
-def snap(belief: BeliefGrid, cm: CostMap, x: float, y: float, max_r: int = 6) -> Cell | None:
+def snap(belief: BeliefGrid, cm: CostMap, x: float, y: float, max_r: int = 10) -> Cell | None:
     """Nearest traversable cell to (x, y) within max_r cells (a drone hugging a wall is still plannable)."""
     i0, j0 = belief.world_to_cell(x, y)
     if belief.inside(i0, j0) and cm.traversable[j0, i0]:
