@@ -82,6 +82,29 @@ def test_auto_snapshots_and_jump_to_act2(test_map, tmp_path) -> None:
     assert fresh.act == 1 and fresh.t == 0.0 and not fresh.swarm.bb.chain_formed
 
 
+def test_realtime_pacing_survives_a_time_jump(test_map, tmp_path) -> None:
+    """Jump to Act 2 moves sim time forward ~55 s: the loop must keep pacing, not sleep it off.
+
+    (Found by driving the real app over /ws: the dashboard froze for seconds after Jump to Act 2.)
+    """
+    import time
+
+    src = _loop(test_map, world_cls=FakeWorld, snapshot_dir=tmp_path)
+    src.run(max_ticks=900)  # saves act2_start when the chain forms
+    snap_ticks = snapshot.load("act2_start", tmp_path)["loop"]["ticks"]
+
+    bus = Bus()
+    loop = _loop(test_map, world_cls=FakeWorld, bus=bus, snapshot_dir=tmp_path)
+    loop.realtime, loop.speed = True, 20.0  # 20x: 20 ticks = 2 s sim = 0.1 s wall
+    loop.run(max_ticks=10)
+    bus.send_command(Act2StartMsg())
+    wall = time.perf_counter()
+    loop.run(max_ticks=snap_ticks + 20)  # the first tick loads the snapshot, then 20 paced ticks
+    took = time.perf_counter() - wall
+    assert loop.act == 2 and loop.ticks == snap_ticks + 20
+    assert took < 1.0, f"loop stalled {took:.1f} s after the time jump"
+
+
 def test_named_snapshot_save_and_load(test_map, tmp_path) -> None:
     bus = Bus()
     loop = _loop(test_map, world_cls=FakeWorld, bus=bus, snapshot_dir=tmp_path)

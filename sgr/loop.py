@@ -93,6 +93,7 @@ class SimLoop:
         self.snapshot_dir = Path(snapshot_dir) if snapshot_dir is not None else None  # None = no snapshots
         self._act2_saved = False
         self.last_snapshot: Path | None = None
+        self._reanchor = False  # set when sim time jumps or the speed changes (run() re-paces)
 
     # ------------------------------------------------------------------
     def run(self, max_ticks: int | None = None) -> None:
@@ -104,6 +105,10 @@ class SimLoop:
                 wall0, sim0 = time.perf_counter(), self.t
                 continue
             self.tick()
+            if self._reanchor:  # snapshot load (sim time jumped) or speed change: pace from here
+                self._reanchor = False
+                wall0, sim0 = time.perf_counter(), self.t
+                continue
             if self.realtime and self.speed > 0:
                 ahead = (self.t - sim0) / self.speed - (time.perf_counter() - wall0)
                 if ahead > 0:
@@ -279,6 +284,7 @@ class SimLoop:
                     self.paused = False
                 elif msg.action == "speed" and msg.value:
                     self.speed = msg.value
+                    self._reanchor = True
         return False
 
     # ------------------------------------------------------------------ snapshots (§8.6)
@@ -305,6 +311,7 @@ class SimLoop:
         if name == "act2_start":
             self._act2_saved = True  # don't overwrite it from the replayed chain
         print(f"sgr: snapshot '{name}' loaded -> t={self.t:.1f}s act {self.act}")
+        self._reanchor = True
         self._resync_clients()
         return True
 
