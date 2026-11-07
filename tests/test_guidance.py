@@ -78,9 +78,31 @@ def test_on_route_go_says_once():
     assert m1.distance == pytest.approx(24.0) and abs(m1.arrow_deg) < 1.0
 
 
-def test_arrow_points_round_the_corner():
+def test_arrow_does_not_cut_the_corner():
+    """1 m before a 90 deg turn the arrow aims at the corner, not 3 m round it (that line crosses the wall)."""
     m, _ = Guidance().tick(0.0, Pose(x=15, y=3, yaw=0.0), _swarm())
-    assert 45 < m.arrow_deg < 90  # target 3 m ahead is north-east: turn left
+    assert 0 < m.arrow_deg < 30
+    m, _ = Guidance().tick(0.0, Pose(x=16, y=3.6, yaw=math.pi / 2), _swarm())  # round it: straight on
+    assert abs(m.arrow_deg) < 5
+
+
+def test_arrow_threads_a_narrow_gap():
+    """S's replay: a 3 m lookahead pointed into a debris block at the 1.2 m rubble gap (a dog-leg)."""
+    jog = [(2.0, 3.0), (10.0, 3.0), (10.6, 4.2), (16.0, 4.2)]  # 1.2 m sideways jog through a gap
+    g = Guidance()
+    m, _ = g.tick(0.0, Pose(x=9.0, y=3.0, yaw=0.0), _swarm(points=jog))
+    from sgr.guidance.geometry import project, seg_dist
+
+    tgt = g._target(jog, project(jog, (9.0, 3.0)), (9.0, 3.0))
+    s0 = project(jog, (9.0, 3.0)).s
+    for k in range(1, 10):  # the straight line to the target stays on the route
+        q = point_at(jog, s0 + (project(jog, tgt).s - s0) * k / 10)
+        assert seg_dist(q, (9.0, 3.0), tgt) <= 0.25 + 1e-9
+
+
+def test_off_route_arrow_returns_to_route():
+    m, _ = Guidance().tick(0.0, Pose(x=8, y=4.5, yaw=0.0), _swarm())  # 1.5 m north of the route, facing east
+    assert -90 < m.arrow_deg < -20  # back down towards the route (right), not 3 m ahead
 
 
 def test_drift_after_two_seconds():
@@ -161,6 +183,24 @@ def test_lead_moves_ahead_of_firefighter():
     _, cmds = Guidance(world=w).tick(0.0, Pose(x=2.5, y=3, yaw=0.0), _swarm())
     c = cmds["D1"]
     assert c.vx > 0.5 and abs(c.vy) < 0.1 and math.hypot(c.vx, c.vy) <= 1.2 + 1e-9
+
+
+def test_waiting_lead_round_a_corner_arrow_follows_route():
+    """Regression (replay deadlock): the lead holds far ahead round the corner; the arrow must follow the
+    route (east, to the corner), not point straight at the lead through the wall (north-east)."""
+    w = StubWorld({"D1": (16.0, 11.0), "D2": (16, 3)})
+    m, cmds = Guidance(world=w).tick(0.0, Pose(x=8.0, y=3.0, yaw=0.0), _swarm())
+    assert m.subtitle == "Follow me." and cmds["D1"].vx == 0 and cmds["D1"].vy == 0
+    assert abs(m.arrow_deg) < 5
+
+
+def test_lead_steps_along_the_route():
+    """The lead flies along the route (round the corner), never straight at its goal through the wall."""
+    w = StubWorld({"D1": (15.5, 3.0), "D2": (16, 12)})  # D2 away from its post, so no handover
+    _, cmds = Guidance(world=w).tick(0.0, Pose(x=14.5, y=3, yaw=0.0), _swarm())  # goal 3 m ahead = (16, 4.5)
+    c = cmds["D1"]
+    # carrot 1 m along the route = (16, 3.5): vy/vx = 1. Straight at the goal (16, 4.5) would be vy/vx = 3.
+    assert c.vx > 0 and c.vy <= c.vx + 1e-9
 
 
 def test_lead_waits_when_firefighter_falls_behind():
