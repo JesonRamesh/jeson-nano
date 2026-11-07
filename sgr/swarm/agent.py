@@ -38,6 +38,7 @@ RETREAT_TIMEOUT_S = 8.0
 PATROL_SPEED = 1.2
 PATROL_WP_M = 0.6  # waypoint reached
 PATROL_STALL_S = 3.0  # no progress for this long (new debris on the route): turn round
+PATROL_DIRECT_M = 2.0  # next waypoint further than this: fly there along a planned path first
 # reflex
 SEP_M = 2.0
 SEP_GAIN = 0.8
@@ -302,11 +303,19 @@ class Agent:
                 self._patrol_k = max(0, min(len(pts) - 1, nk))
                 self._patrol_t, self._patrol_best = t, math.inf
                 gx, gy = pts[self._patrol_k]
-            d = np.array([gx - pose.x, gy - pose.y])
-            n = float(np.linalg.norm(d))
-            if n > 1e-6:
-                want = d / n * min(PATROL_SPEED, 0.3 + n)
-                yaw_des = math.atan2(d[1], d[0])  # camera looks along the route too
+            if math.hypot(gx - pose.x, gy - pose.y) > PATROL_DIRECT_M:  # far (joining the stretch): plan, no walls
+                if self._spath is None or self._spath[-1] != (gx, gy):
+                    self._spath = astar(belief, (pose.x, pose.y), (gx, gy)) or [(gx, gy)]
+                    self._spath[-1] = (gx, gy)
+                want, yaw_des = self._follow(pose, self._spath, PATROL_SPEED)
+                self._patrol_t = t  # progress along a planned path is not a stall
+            else:
+                self._spath = None
+                d = np.array([gx - pose.x, gy - pose.y])
+                n = float(np.linalg.norm(d))
+                if n > 1e-6:
+                    want = d / n * min(PATROL_SPEED, 0.3 + n)
+                    yaw_des = math.atan2(d[1], d[0])  # camera looks along the route too
         elif self._station is not None:
             self.mode = self._station_mode
             sx, sy = self._station

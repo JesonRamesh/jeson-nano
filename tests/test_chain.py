@@ -146,7 +146,7 @@ def test_act2_blockage_ahead_replans_from_the_firefighter(swarm: Swarm) -> None:
     assert any(r.action == "CHAIN_POSITION" and "guiding the firefighter" in r.reason for r in rows)
 
 
-# ---- Act 1 patrol: once the chain is ready, the lead + sentinel sweep the route (judge clicks get seen) ----
+# ---- Act 1 patrol: once the chain is ready, the chain drones sweep the route (judge clicks get seen) ----
 
 
 def test_patrol_starts_when_chain_ready_and_stops_in_act2(swarm: Swarm) -> None:
@@ -158,11 +158,13 @@ def test_patrol_starts_when_chain_ready_and_stops_in_act2(swarm: Swarm) -> None:
     assert st.phase == "chain_ready"
     assert all(swarm.agents[d].patrolling for d in walkers)
     survivor = next(d for d, r in roles.items() if r == "survivor")
-    assert not swarm.agents[survivor].patrolling  # stays over the survivor
+    assert swarm.agents[survivor].patrolling  # covers the last stretch, ending at the survivor
+    sv_pts = swarm.agents[survivor]._patrol
+    assert min(math.dist(p, SURVIVOR) for p in sv_pts) < 2.0
     lead = next(d for d, r in roles.items() if r == "lead")
     lead_pts, sent_pts = swarm.agents[lead]._patrol, swarm.agents[next(d for d in walkers if d != lead)]._patrol
     ent = swarm.rescue.entrance
     assert min(math.dist(p, ent) for p in lead_pts) < min(math.dist(p, ent) for p in sent_pts)  # lead: first half
     _, _, st = swarm.tick(41.1, _r(41.1), [], ff=Pose(x=2.0, y=3.0))  # Act 2: back to the posts
-    assert not any(swarm.agents[d].patrolling for d in walkers)
+    assert not any(swarm.agents[d].patrolling for d in roles)  # incl. the survivor drone (hovers again)
     assert st.phase == "chain_ready"

@@ -92,6 +92,7 @@ DEFAULT_SCRIPT: dict[str, Any] = {
 }
 
 AUTOPILOT_LOOKAHEAD_M = 1.2
+AUTOPILOT_BEHIND_M = 1.0  # stay at least this far behind the lead along the route
 CLICK_REACT_S = 30.0  # a judge click must be noticed within this (sim s): the patrol sweeps ~30 m stretches
 CLICK_NEAR_M = 2.5  # a MARK_BLOCKED this close to the click counts as noticing it
 KEY_ACTIONS = {"CONFIRM_HAZARD", "REJECT_DETECTION", "RETREAT", "DRONE_LOST", "SURVIVOR_CONFIRMED", "REPLAN",
@@ -174,6 +175,12 @@ class Replay:
             return
         err = (heading - ff.yaw + math.pi) % (2 * math.pi) - math.pi
         fwd = 0.0 if done else (1.0 if abs(err) < math.radians(50) else 0.3)
+        # a firefighter told "Follow the drone" stays behind it: don't overtake the guidance lead
+        lead = getattr(self.loop.guidance, "lead", None)
+        if lead and len(pts) >= 2 and lead not in self.loop.dead and not done:
+            q = self.loop.world.drone_pose(lead)
+            if _arc(pts, (q.x, q.y)) < _arc(pts, (ff.x, ff.y)) + AUTOPILOT_BEHIND_M:
+                fwd = min(fwd, 0.15)  # let it get ahead again
         # stuck (snagged on a corner): sidestep for a moment
         moved = math.dist((ff.x, ff.y), self._ff_last) if self._ff_last else 1.0
         self._ff_last = (ff.x, ff.y)
@@ -268,6 +275,19 @@ class Replay:
             raise ValueError(f"unknown replay action: {do}")
         self.prev_t = t
         self._say(f"{t:7.1f}  REPLAY {do} {note}".rstrip())
+
+
+def _arc(pts: list[tuple[float, float]], p: tuple[float, float]) -> float:
+    """Arc length of p's projection onto the polyline."""
+    best_s, s_acc, best_d = 0.0, 0.0, math.inf
+    for a, b in zip(pts, pts[1:]):
+        L = math.dist(a, b)
+        u = 0.0 if L == 0 else max(0.0, min(1.0, ((p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1])) / L**2))
+        d = math.dist(p, (a[0] + u * (b[0] - a[0]), a[1] + u * (b[1] - a[1])))
+        if d < best_d:
+            best_d, best_s = d, s_acc + u * L
+        s_acc += L
+    return best_s
 
 
 def _lookahead(pts: list[tuple[float, float]], p: tuple[float, float], ahead: float) -> tuple[float, float]:
