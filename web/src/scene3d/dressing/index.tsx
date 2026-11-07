@@ -17,7 +17,7 @@ import { useFreeGrid } from '../../state/grid'
 import { sim, useSim } from '../../state/store'
 import { Atmosphere } from './atmosphere'
 import { FireFX } from './fire'
-import { beliefDebris, beliefFires, mergeFires, useScenarioHazards, type DebrisBlock } from './hazards'
+import { beliefFires, mergeFires, RubbleTracker, useScenarioHazards, type DebrisBlock } from './hazards'
 import { RubblePile } from './rubble'
 import { SmokeField } from './smokefield'
 
@@ -54,6 +54,7 @@ export function Dressing({ mapName, size, nodes, gridUrl, reveal = 'belief' }: D
   // what the swarm has marked: fires (incl. the flare-up) and LiDAR-detected debris
   const [seen, setSeen] = useState<Fire[]>([])
   const [found, setFound] = useState<DebrisBlock[]>([])
+  const tracker = useRef(new RubbleTracker())
   const lastV = useRef(-1)
   const lastT = useRef(0)
   useFrame(({ clock }) => {
@@ -63,8 +64,8 @@ export function Dressing({ mapName, size, nodes, gridUrl, reveal = 'belief' }: D
     lastT.current = clock.elapsedTime
     const f = beliefFires(b)
     setSeen((old) => (sameFires(old, f) ? old : f))
-    const d = beliefDebris(b)
-    setFound((old) => (old.length === d.length ? old : d))
+    const d = tracker.current.update(b, clock.elapsedTime)
+    if (d) setFound(d)
   })
 
   const clickKey = useSim((s) => (s.state?.click_handles ?? []).map((c) => c.id).join(','))
