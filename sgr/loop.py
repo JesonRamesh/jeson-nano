@@ -48,7 +48,9 @@ from sgr.contracts import (
 )
 
 RESYNC_S = 5.0  # wall seconds between full belief-map resyncs (late-joining browsers catch up)
-FLARE_NEAR_M = 6.0  # flare-up hits the drone nearest a fire if it is this close, else scenario.flare.target
+FLARE_NEAR_M = 3.7  # flare-up hits the drone nearest a fire if this close: the watcher AT its post (3.3 m)
+FLARE_MAX_WAIT_S = 30.0  # flare.t is a "not before": wait this long for a drone to be near a fire
+_WAIT = "__wait__"  # _flare_victim(): nobody near a fire yet, keep the flare pending
 _MOCK_FRAME = np.zeros((config.CAM_H, config.CAM_W, 3), dtype=np.uint8)
 
 
@@ -116,8 +118,10 @@ class SimLoop:
             return  # a snapshot was loaded: the next tick starts from the restored state
         # 2 timed events: flare-up (§7.4)
         if s.flare and not self._flared and self.t >= s.flare.t:
-            victim = self._flare_victim()
-            if victim is not None:
+            victim = self._flare_victim(waited=self.t - s.flare.t)
+            if victim == _WAIT:
+                victim = None
+            elif victim is not None:
                 p = w.drone_pose(victim)
                 # force: bypass the 1 m click clearance (the victim drone is AT this spot).
                 # Not pushed on click_stack, so Undo can't remove the flare-up fire.
@@ -125,7 +129,9 @@ class SimLoop:
                 w.kill_drone(victim)
                 self.dead.add(victim)
                 self.flare_victim = victim
-            self._flared = True
+                self._flared = True
+            else:
+                self._flared = True
         # 3 sensors (a dead drone publishes nothing = no heartbeat)
         alive = [d for d in s.drones.ids if d not in self.dead]
         readings = {
@@ -192,11 +198,12 @@ class SimLoop:
             self._publish(self.budget.message(self.perception.metrics(), self.speed))
 
     # ------------------------------------------------------------------
-    def _flare_victim(self) -> str | None:
+    def _flare_victim(self, waited: float = math.inf) -> str | None:
         """The flare-up hits the alive drone nearest a burning fire (the one watching it, §5 beat).
 
         Simulation side, so reading the World's real fires is fine here (never in sgr/swarm).
-        Falls back to scenario.flare.target when nothing is burning.
+        If no drone is near a fire yet (slow Gemma), the flare waits up to FLARE_MAX_WAIT_S, then
+        falls back to scenario.flare.target. Returning the sentinel _WAIT keeps it pending.
         """
         alive = [d for d in self.scenario.drones.ids if d not in self.dead]
         if not alive:
@@ -213,6 +220,8 @@ class SimLoop:
         best = min(alive, key=dist)
         if dist(best) <= FLARE_NEAR_M:
             return best
+        if waited < FLARE_MAX_WAIT_S:
+            return _WAIT
         return self.scenario.flare.target if self.scenario.flare.target in alive else best
 
     def _submit_frame(self, drone: str, pose: Pose) -> None:

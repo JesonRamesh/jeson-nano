@@ -26,6 +26,8 @@ from .planner import DistanceField, astar, cost_map, path_hits, path_length, rdp
 from .trace import Trace
 
 ROUTE_MARGIN_M = 0.5  # new blocked/fire cell this close to the route -> re-plan
+SAME_ROUTE_LEN_M = 0.5  # a re-plan this close in length ...
+SAME_ROUTE_DEV_M = 0.6  # ... and never further than this from the old line is the same route (no REPLAN row)
 OLD_ROUTE_S = 6.0
 NO_ROUTE_RECHECK_S = 2.0
 WATCH_M = 3.3  # fire-watch distance: ~55 °C on the heat model, under the 70 °C retreat limit
@@ -83,7 +85,7 @@ class Rescue:
     # ------------------------------------------------------------------ route
     def _plan(self, t: float, target: Pt, first: bool = False) -> None:
         old = self.bb.route
-        new = astar(self.belief, self.entrance, target)
+        new = astar(self.belief, self.entrance, target, drone=False)  # firefighter route: §8.3 costs
         if new is None:
             self._next_check = t + NO_ROUTE_RECHECK_S
             if old.status != "none":
@@ -98,6 +100,10 @@ class Rescue:
             return
         length = path_length(new)
         pts = [(round(x, 2), round(y, 2)) for x, y in rdp(new, 0.1)]
+        if not first and old.status == "ok" and self.path and self._same_route(self.path, new):
+            self.path = new  # more cells of an obstacle we already avoid: refresh quietly, keep the version
+            self.bb.route = Route(points=pts, status="ok", version=old.version)
+            return
         if not first:  # the first plan is not a re-plan (the chain rows follow it)
             if old.points:
                 self.bb.old_routes.append(OldRoute(points=old.points, until=t + OLD_ROUTE_S))
@@ -110,6 +116,14 @@ class Rescue:
             self.bb.event("replan", xy=self._pending[3] if self._pending else None)
         self.path = new
         self.bb.route = Route(points=pts, status="ok", version=old.version + 1)
+
+    @staticmethod
+    def _same_route(old: list[Pt], new: list[Pt]) -> bool:
+        if abs(path_length(new) - path_length(old)) >= SAME_ROUTE_LEN_M:
+            return False
+        o = np.asarray(old)
+        dev = max(float(np.min(np.hypot(o[:, 0] - x, o[:, 1] - y))) for x, y in new)
+        return dev < SAME_ROUTE_DEV_M
 
     def _why(self) -> str:
         if self._pending is None:

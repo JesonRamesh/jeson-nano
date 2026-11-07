@@ -3,6 +3,9 @@
 - Obstacles (walls, blocked_new) are inflated by 0.3 m; fire plus a 1.0 m margin is impassable.
 - Cost per cell = 1 + 5·heat_norm + 3·near_wall.
 - `distance_field` is a fast Dijkstra over the same costs (exploration's nearest-target search).
+- Drone paths (`drone=True`, the default) also treat the assumed > 70 °C core around a confirmed fire
+  (belief.heat >= HOT_CORE) as impassable: a drone must never plan through heat it would retreat from.
+  The firefighter route (`drone=False`) follows §8.3 exactly: heat is a cost, fire + 1 m is impassable.
 """
 
 from __future__ import annotations
@@ -20,6 +23,8 @@ INFLATE_M = 0.3
 FIRE_MARGIN_M = 1.0
 NEAR_WALL_M = 0.8  # near_wall ramps 1 -> 0 between INFLATE_M and this
 SQRT2 = math.sqrt(2.0)
+HOT_CORE = 0.99  # belief.heat at / above this = assumed over the drones' 70 °C limit
+SNAP_CELLS = 20  # a drone deep in a hot zone may be up to 4 m from the nearest plannable cell
 
 Point = tuple[float, float]
 Cell = tuple[int, int]  # (i, j)
@@ -28,8 +33,9 @@ Cell = tuple[int, int]  # (i, j)
 class CostMap:
     """Traversable mask + per-cell cost for one belief version (cached on `belief.version`)."""
 
-    def __init__(self, belief: BeliefGrid) -> None:
+    def __init__(self, belief: BeliefGrid, drone: bool = True) -> None:
         self.version = belief.version
+        self.drone = drone
         res = belief.res
         obstacle = (belief.state == WALL) | (belief.state == BLOCKED)
         d_obs = distance_transform_edt(~obstacle) * res  # distance from cell centre to the nearest obstacle centre
@@ -38,21 +44,24 @@ class CostMap:
         # an obstacle cell centre at distance d means its face is ~d - res/2 away
         self.traversable = (d_obs - res / 2 >= INFLATE_M - 1e-6) & (d_fire - res / 2 > FIRE_MARGIN_M)
         self.traversable &= ~obstacle & ~fire
+        if drone:
+            self.traversable &= belief.heat < HOT_CORE
         near_wall = np.clip((NEAR_WALL_M - (d_obs - res / 2)) / (NEAR_WALL_M - INFLATE_M), 0.0, 1.0)
         heat = np.clip(belief.heat, 0.0, 1.0)
         self.cost = 1.0 + 5.0 * heat + 3.0 * near_wall
         self.mcp_cost = np.where(self.traversable, self.cost, np.inf)
 
 
-def cost_map(belief: BeliefGrid) -> CostMap:
-    cm = getattr(belief, "_costmap", None)
+def cost_map(belief: BeliefGrid, drone: bool = True) -> CostMap:
+    attr = "_costmap" if drone else "_costmap_ff"
+    cm = getattr(belief, attr, None)
     if cm is None or cm.version != belief.version:
-        cm = CostMap(belief)
-        belief._costmap = cm  # type: ignore[attr-defined]
+        cm = CostMap(belief, drone)
+        setattr(belief, attr, cm)
     return cm
 
 
-def snap(belief: BeliefGrid, cm: CostMap, x: float, y: float, max_r: int = 10) -> Cell | None:
+def snap(belief: BeliefGrid, cm: CostMap, x: float, y: float, max_r: int = SNAP_CELLS) -> Cell | None:
     """Nearest traversable cell to (x, y) within max_r cells (a drone hugging a wall is still plannable)."""
     i0, j0 = belief.world_to_cell(x, y)
     if belief.inside(i0, j0) and cm.traversable[j0, i0]:
@@ -72,9 +81,9 @@ _NEIGH = [(1, 0, 1.0), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0),
           (1, 1, SQRT2), (1, -1, SQRT2), (-1, 1, SQRT2), (-1, -1, SQRT2)]
 
 
-def astar(belief: BeliefGrid, start: Point, goal: Point) -> list[Point] | None:
+def astar(belief: BeliefGrid, start: Point, goal: Point, drone: bool = True) -> list[Point] | None:
     """A* from start to goal (world xy). Returns waypoints (cell centres, start..goal) or None if no route."""
-    cm = cost_map(belief)
+    cm = cost_map(belief, drone)
     s, g = snap(belief, cm, *start), snap(belief, cm, *goal)
     if s is None or g is None:
         return None
@@ -116,9 +125,9 @@ def astar(belief: BeliefGrid, start: Point, goal: Point) -> list[Point] | None:
 class DistanceField:
     """Dijkstra from one start over the cost map (skimage MCP, C speed)."""
 
-    def __init__(self, belief: BeliefGrid, start: Point) -> None:
+    def __init__(self, belief: BeliefGrid, start: Point, drone: bool = True) -> None:
         self.belief = belief
-        cm = cost_map(belief)
+        cm = cost_map(belief, drone)
         self.start = snap(belief, cm, *start)
         if self.start is None:
             self.cost = np.full((belief.h, belief.w), np.inf)

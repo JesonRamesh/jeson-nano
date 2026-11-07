@@ -55,7 +55,10 @@ def test_act1_beats(test_map) -> None:
     actions = {r.action for r in loop.trace}
     assert "SURVIVOR_CONFIRMED" in actions, "survivor never confirmed"
     assert "REPLAN" in actions, "no REPLAN"
-    assert "REJECT_DETECTION" in actions, "no REJECT_DETECTION"
+    # decoy beat dropped (team decision): the survivor is checked before it is confirmed
+    inspect_survivor = [r.t for r in loop.trace if r.action == "INSPECT" and "person" in r.reason]
+    confirmed = [r.t for r in loop.trace if r.action == "SURVIVOR_CONFIRMED"]
+    assert inspect_survivor and confirmed and inspect_survivor[0] <= confirmed[0], "survivor not inspected first"
     assert "CONFIRM_HAZARD" in actions, "fire never confirmed"
     victim = loop.flare_victim
     assert any(r.action == "DRONE_LOST" and r.drone == victim for r in loop.trace), f"{victim} never declared lost"

@@ -118,8 +118,9 @@ class Hazards:
             self._settle(det, agents)
             if det.label == "person":
                 self.bb.survivor = SurvivorState(status="confirmed", x=xy[0], y=xy[1], conf=det.combined)
+                closer = " after a closer look" if det.relooks else ""
                 self.trace.log(t, det.drone, "SURVIVOR_CONFIRMED",
-                               f"Survivor confirmed at ({xy[0]:.1f}, {xy[1]:.1f}): {_scores(det)}",
+                               f"Survivor confirmed{closer} at ({xy[0]:.1f}, {xy[1]:.1f}): {_scores(det)}",
                                _gemma_evidence(det))
                 self.bb.event("survivor_found", drone=det.drone, xy=xy)
             else:
@@ -160,10 +161,19 @@ class Hazards:
                 ag.release()  # Gemma is slow: carry on exploring; the next status update restarts this
                 ins.phase, ins.drone = "parked", None
             elif ins.phase == "approach" and (ag.in_position or t - ins.since > APPROACH_TIMEOUT_S):
+                where = "facing it" if ag.in_position else "as close as it can get"  # before hold() resets it
                 out.append(ins.det_id)
                 ins.asked += 1
                 ins.phase, ins.since = "wait", t
                 ag.hold(ins.target)
+                p = alive[ins.drone]
+                dist = math.hypot(p.x - ins.target[0], p.y - ins.target[1])
+                what = {"fire": "possible fire", "person": "possible person"}.get(ins.label, ins.label)
+                self.trace.log(t, ins.drone, "INSPECT",
+                               f"{ins.drone} {dist:.1f} m from the {what}, {where}: "
+                               f"asking Gemma for a closer look ({ins.asked}/{config.MAX_RELOOKS})",
+                               Evidence(sensor="planner", value={"detection": ins.det_id, "dist_m": round(dist, 2),
+                                                                 "relook": ins.asked}))
         return out
 
     # ------------------------------------------------------------------ heat
@@ -282,6 +292,10 @@ class Hazards:
         cx = b.origin[0] + (ii + 0.5) * b.res
         cy = b.origin[1] + (jj + 0.5) * b.res
         far = np.hypot(cx - src[0], cy - src[1]) >= RETREAT_CLEAR_M
+        for h in self.bb.hazards.values():  # two fires close together: don't flee one into the other
+            if h.kind == "fire":
+                far &= np.hypot(cx - h.xy[0], cy - h.xy[1]) >= RETREAT_CLEAR_M
+        far &= b.heat < 0.5
         goal = df.nearest(far)
         return df.path_to(goal) if goal is not None else None
 
