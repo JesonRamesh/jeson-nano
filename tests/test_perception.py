@@ -95,6 +95,17 @@ def test_mock_decoy_rejected_on_relook_then_blacklisted(studio):
     assert len(again) == 1 and again[0].id != det.id
 
 
+def test_mock_latency_is_configurable(studio):
+    """Rehearse live-Gemma timing headless: answers arrive after mock_latency_s, not 1 s."""
+    p = Perception(mode="mock", ground_truth=studio.ground_truth, line_of_sight=studio.line_of_sight,
+                   mock_latency_s=7.0)
+    assert _look(p, studio, "D1", 0.0)[0].status == "pending"
+    assert _look(p, studio, "D4", 6.9) == []
+    done = _look(p, studio, "D4", 7.0)
+    assert done[0].status == "confirmed" and done[0].gemma.latency_s == 7.0
+    assert p.metrics().p50_s == 7.0
+
+
 def test_mock_dedups_repeated_views(studio):
     p = _mock(studio)
     assert len(_look(p, studio, "D1", 0.0)) == 1
@@ -129,6 +140,20 @@ def test_mock_state_roundtrip(studio):
     q.set_state(s)
     done = _look(q, studio, "D4", 1.0)
     assert done[0].id == det.id and done[0].status == "low_conf"
+
+
+@needs_gl
+def test_snapshot_from_live_mode_loads_in_mock(studio):
+    """act2_start.pkl is recorded with live Gemma on the demo laptop but loaded by teammates in mock mode."""
+    live = _live(studio, lambda f: _g(fire=True, conf=0.9))
+    _frame(live, studio, "D1", 0.0)
+    _settle(live)
+    state = live.get_state()
+    live.close()
+    mock = _mock(studio)
+    with pytest.warns(UserWarning, match="mode 'local'"):
+        mock.set_state(state)
+    assert [d.label for d in _look(mock, studio, "D1", 1.0)] == ["fire"]  # works normally afterwards
 
 
 def test_mock_needs_ground_truth():

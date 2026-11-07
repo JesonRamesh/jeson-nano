@@ -24,7 +24,7 @@ from sgr.contracts import XY, CamInfo, Detection, GemmaResult, GroundTruth
 
 from .fusion import fuse
 
-LATENCY_S = 1.0  # simulated Gemma latency (sim time)
+LATENCY_S = 1.0  # default simulated Gemma latency (sim time). Live gemma4:e4b is ~5-8 s: use latency_s=7 to rehearse it
 RANGE_M = 5.5  # about the real detector's range at 320x240 (fire ~6 m, person ~5 m)
 MERGE_M = 1.0
 BLACKLIST_S = 60.0
@@ -37,18 +37,18 @@ _KINDS = {"fire": ("fire", 0.6, 0.80), "survivor": ("person", 0.15, 0.85), "deco
 _MODEL = "mock"
 
 
-def _gemma(kind: str, relooks: int) -> GemmaResult:
+def _gemma(kind: str, relooks: int, latency: float = LATENCY_S) -> GemmaResult:
     if kind == "fire":
         return GemmaResult(fire=True, person=False, confidence=0.88, caption="Flames on the floor ahead.",
-                           latency_s=LATENCY_S, model_tag=_MODEL)
+                           latency_s=latency, model_tag=_MODEL)
     if kind == "survivor":
         return GemmaResult(fire=False, person=True, confidence=0.93, caption="A person lying on the floor.",
-                           latency_s=LATENCY_S, model_tag=_MODEL)
+                           latency_s=latency, model_tag=_MODEL)
     if relooks == 0:  # decoy, first look from afar
         return GemmaResult(fire=True, person=False, confidence=0.35, caption="Orange glow, unclear.",
-                           latency_s=LATENCY_S, model_tag=_MODEL)
+                           latency_s=latency, model_tag=_MODEL)
     return GemmaResult(fire=False, person=False, confidence=0.8, caption="An orange panel on a wall, no flames.",
-                       latency_s=LATENCY_S, model_tag=_MODEL)
+                       latency_s=latency, model_tag=_MODEL)
 
 
 @dataclass
@@ -62,6 +62,7 @@ class _Track:
 class MockPerception:
     ground_truth: Callable[[], GroundTruth]
     line_of_sight: Callable[[str, float, float, float], bool] | None = None
+    latency_s: float = LATENCY_S
     now: float = 0.0
     _tracks: dict[str, _Track] = field(default_factory=dict)
     _blacklist: list[tuple[str, float, float, float]] = field(default_factory=list)  # kind, x, y, until
@@ -85,17 +86,17 @@ class MockPerception:
             det = Detection(id=f"det{self._next:04d}", drone=drone, t=t, label=label, world_xy=XY(x=x, y=y),
                             score_fast=score, status="pending", frame_id=frame_id)
             self._next += 1
-            self._tracks[det.id] = _Track(det, kind, due=t + LATENCY_S)
+            self._tracks[det.id] = _Track(det, kind, due=t + self.latency_s)
             self._out.append(det.model_copy())
 
     def poll(self) -> list[Detection]:
         for tr in self._tracks.values():
             if tr.due is not None and self.now >= tr.due:
                 tr.due = None
-                g = _gemma(tr.kind, tr.det.relooks)
+                g = _gemma(tr.kind, tr.det.relooks, self.latency_s)
                 combined, status = fuse(tr.det.label, tr.det.score_fast, g, tr.det.relooks)
                 tr.det = tr.det.model_copy(update={"gemma": g, "combined": combined, "status": status})
-                self._latencies.append(LATENCY_S)
+                self._latencies.append(self.latency_s)
                 if status == "rejected":
                     self._blacklist.append((tr.kind, tr.det.world_xy.x, tr.det.world_xy.y, self.now + BLACKLIST_S))
                 self._out.append(tr.det.model_copy())
@@ -108,7 +109,7 @@ class MockPerception:
         if tr is None or tr.due is not None or tr.det.status not in ("low_conf", "unconfirmed"):
             return
         tr.det = tr.det.model_copy(update={"relooks": tr.det.relooks + 1, "status": "pending"})
-        tr.due = self.now + LATENCY_S
+        tr.due = self.now + self.latency_s
         self._out.append(tr.det.model_copy())
 
     def queue_len(self) -> int:
