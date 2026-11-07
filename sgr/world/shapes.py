@@ -41,6 +41,10 @@ FIRE_RGBAS = (
     (1.0, 0.60, 0.08, 1.0),  # amber
     (0.95, 0.32, 0.02, 1.0),  # deep orange
 )
+# No glow on the decoy: tested with gemma4:e4b, a glowing panel reads as "flames" from a grazing
+# fly-past (3/3), while the matte panel reads "orange panel, no fire" (10/12 views). The detector's
+# low V threshold catches the matte panel at grazing angles instead.
+DECOY_EMISSION = 0.0
 FIRE_EMISSION = 0.6  # enough to glow; 1.0 + headlight saturates everything to flat yellow
 
 # visual-only geoms: never collide
@@ -82,6 +86,7 @@ def assets() -> str:
     out = [f'<mesh name="{n}" vertex="{_cone_vertices(r, h)}"/>' for n, r, h in _CONES]
     out.append(f'<material name="mat_fire" emission="{FIRE_EMISSION}" specular="0" shininess="0"/>')
     out.append('<material name="mat_matte" specular="0" shininess="0" reflectance="0"/>')
+    out.append(f'<material name="mat_decoy" emission="{DECOY_EMISSION}" specular="0" shininess="0" reflectance="0"/>')
     return "\n".join(out)
 
 
@@ -143,7 +148,7 @@ def decoy_panel(name: str, x: float, y: float, normal_yaw: float) -> str:
     return (
         f'<body name="{name}" pos="{x} {y} {DECOY_CENTRE_Z}" quat="{yaw_quat(normal_yaw)}">'
         f'<geom name="{name}_g" type="box" size="0.01 {w / 2} {h / 2}" rgba="{rgba(DECOY_RGBA)}" '
-        f'material="mat_matte" group="1" {_VIS}/></body>'
+        f'material="mat_decoy" group="1" {_VIS}/></body>'
     )
 
 
