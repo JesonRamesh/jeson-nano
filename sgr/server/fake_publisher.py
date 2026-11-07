@@ -53,10 +53,10 @@ def test_jpeg(drone: str, colour: str, t: float, seq: int) -> bytes:
 
 _SCRIPT = [  # (t, drone, action, reason, sensor, value)
     (2, "swarm", "ASSIGN_AREA", "Areas assigned to D1–D4 by nearest unclaimed node", "planner", "4 areas"),
-    (6, "D2", "INSPECT", "D2 inspecting orange object: fast detector 0.62, Gemma 0.31 — moving closer", "camera", 0.62),
-    (9, "D2", "REJECT_DETECTION", "D2: Gemma says not fire (0.20) after 2 looks — false alarm", "gemma", 0.2),
-    (13, "D3", "CONFIRM_HAZARD", "D3 fire confirmed: fast 0.85, Gemma 0.92 — zone marked", "gemma", 0.92),
-    (17, "D3", "RETREAT", "D3 temperature 74 °C > 70 °C limit — retreating 3 m", "temp", 74.0),
+    (6, "D2", "INSPECT", "D2 inspecting orange object: fast detector 0.62, Gemma 0.31, moving closer", "camera", 0.62),
+    (9, "D2", "REJECT_DETECTION", "D2: Gemma says not fire (0.20) after 2 looks: false alarm", "gemma", 0.2),
+    (13, "D3", "CONFIRM_HAZARD", "D3 fire confirmed: fast 0.85, Gemma 0.92, zone marked", "gemma", 0.92),
+    (17, "D3", "RETREAT", "D3 temperature 74 °C > 70 °C limit, retreating 3 m", "temp", 74.0),
     (21, "D1", "MARK_BLOCKED", "D1 LiDAR: 1.1 m measured vs 4.8 m expected on 2 scans", "lidar", [1.1, 4.8]),
     (22, "swarm", "REPLAN", "Route v2 avoids blocked corridor (+3.4 m)", "planner", {"version": 2}),
 ]

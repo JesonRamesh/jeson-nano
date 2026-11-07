@@ -8,7 +8,7 @@ type Tone = 'danger' | 'warn' | 'good'
 
 /** Banner text for each event kind (spec §10.1 "Banners for key events"). */
 function bannerFor(e: SimEventMsg): { text: string; tone: Tone } {
-  const who = e.drone ? ` — ${e.drone}` : ''
+  const who = e.drone ? `: ${e.drone}` : ''
   switch (e.kind) {
     case 'fire_confirmed':
       return { text: `FIRE CONFIRMED${who}`, tone: 'danger' }
@@ -17,7 +17,7 @@ function bannerFor(e: SimEventMsg): { text: string; tone: Tone } {
     case 'drone_lost':
       return { text: `${e.drone ?? 'DRONE'} SIGNAL LOST`, tone: 'danger' }
     case 'blocked':
-      return { text: 'ROUTE BLOCKED — RE-PLANNING', tone: 'warn' }
+      return { text: 'ROUTE BLOCKED, RE-PLANNING', tone: 'warn' }
     case 'replan':
       return { text: 'NEW ROUTE', tone: 'good' }
     case 'survivor_found':
@@ -25,11 +25,11 @@ function bannerFor(e: SimEventMsg): { text: string; tone: Tone } {
     case 'chain_formed':
       return { text: 'CHECKPOINT CHAIN FORMED', tone: 'good' }
     case 'no_route':
-      return { text: 'NO SAFE ROUTE — HOLDING', tone: 'danger' }
+      return { text: 'NO SAFE ROUTE, HOLDING', tone: 'danger' }
     case 'mission_complete':
       return { text: 'MISSION COMPLETE', tone: 'good' }
     case 'survivor_check':
-      return { text: `POSSIBLE SURVIVOR — ${e.drone ?? 'DRONE'} TAKING A CLOSER LOOK`, tone: 'warn' }
+      return { text: `POSSIBLE SURVIVOR: ${e.drone ?? 'DRONE'} TAKING A CLOSER LOOK`, tone: 'warn' }
   }
 }
 
