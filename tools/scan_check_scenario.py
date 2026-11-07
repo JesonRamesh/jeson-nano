@@ -147,12 +147,20 @@ def main() -> int:
     if not on_route:
         print("  WARNING: no debris on the first route -> no LiDAR re-plan beat (spec §5)")
 
+    fires_xy = [(f["x"], f["y"]) for f in sc.get("fires", [])]
+    amb = sc.get("heat", {}).get("ambient_c", 20)
+    lim = sc.get("heat", {}).get("limit_c", 70)
+    route = full or base
     for f in sc.get("fires", []):
-        route = full or base
         d = min(math.dist((f["x"], f["y"]), p) for p in route) if route else math.inf
-        tmax = max(temperature_at(x, y, [(f["x"], f["y"])], sc.get("heat", {}).get("ambient_c", 20)) for x, y in route)
-        print(f"  fire ({f['x']:.1f}, {f['y']:.1f}) size {f.get('size', 1.5)}: route passes {d:.1f} m away, "
-              f"max {tmax:.0f} C on the route (limit {sc.get('heat', {}).get('limit_c', 70)} C; overheat inside ~3.0 m)")
+        print(f"  fire ({f['x']:.1f}, {f['y']:.1f}) size {f.get('size', 1.5)}: route passes {d:.1f} m away")
+    if fires_xy and route:
+        # heat adds up over all fires (sgr.world.heat sums them)
+        tmax, at = max((temperature_at(x, y, fires_xy, amb), (x, y)) for x, y in route)
+        print(f"  heat on the route (all fires together): max {tmax:.0f} C at ({at[0]:.1f}, {at[1]:.1f}) "
+              f"(retreat at {lim} C)" + ("  <-- drones on the route will overheat" if tmax >= lim else ""))
+        if tmax >= lim:
+            fails.append(f"route heat {tmax:.0f} C >= {lim} C")
     if not sc.get("fires"):
         print("  WARNING: no fires")
     dc = sc.get("decoy")
