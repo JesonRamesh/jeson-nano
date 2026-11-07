@@ -36,6 +36,7 @@ export interface Snapshot {
   trace: TraceRow[]
   detections: Record<string, DetectionMsg>
   budget: BudgetMsg | null
+  budgetAt: number // performance.now() when the last budget arrived
   lastEvent: EventMsg | null
 }
 
@@ -47,7 +48,7 @@ const TRACE_CAP = 1000
  * the map canvas reads it directly and watches `belief.version`.
  */
 class SimStore {
-  snap: Snapshot = { hello: null, state: null, trace: [], detections: {}, budget: null, lastEvent: null }
+  snap: Snapshot = { hello: null, state: null, trace: [], detections: {}, budget: null, budgetAt: 0, lastEvent: null }
   belief: BeliefGrid | null = null
   private listeners = new Set<() => void>()
 
@@ -97,7 +98,7 @@ class SimStore {
         this.set({ detections: { ...this.snap.detections, [msg.drone]: msg } })
         break
       case 'budget':
-        this.set({ budget: msg })
+        this.set({ budget: msg, budgetAt: performance.now() })
         break
       case 'event':
         this.set({ lastEvent: msg })

@@ -1,13 +1,25 @@
+import { useEffect, useState } from 'react'
 import { useSim } from '../state/store'
+
+const STALE_MS = 3000 // budget is 1 Hz; older than this = the backend stopped sending
 
 const n = (v: number | null | undefined, digits = 1, unit = '') => (v == null ? 'N/A' : `${v.toFixed(digits)}${unit}`)
 
 /** Live budget panel (§7.5). Values come from the `budget` message (1 Hz). */
 export function BudgetPanel() {
   const b = useSim((s) => s.budget)
+  const seenAt = useSim((s) => s.budgetAt)
+  const [now, setNow] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setNow(performance.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  const stale = b != null && now - seenAt > STALE_MS
   return (
-    <section className="budget-panel">
-      <h2>Budget</h2>
+    <section className={`budget-panel ${stale ? 'stale' : ''}`}>
+      <h2>
+        Budget{stale && <span className="budget-stale">stale</span>}
+      </h2>
       {!b ? (
         <p className="muted">waiting for budget…</p>
       ) : (
