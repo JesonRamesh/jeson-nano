@@ -183,7 +183,8 @@ export type ServerMsg =
   | BudgetMsg
   | SummaryMsg
 
-// Binary frame: [u8 channel][u32 frame_seq, little-endian][JPEG bytes].
+// Binary frame: [u8 channel][u32 frame_seq, big-endian][JPEG bytes]
+// (matches FRAME_HEADER = struct.Struct(">BI") in sgr/contracts.py).
 // channel 1–4 = drone cams D1–D4.
 export interface DroneFrame {
   channel: number
@@ -199,4 +200,5 @@ export type ClientMsg =
   | { type: 'control'; action: 'start' | 'pause' | 'reset' | 'speed'; value?: number }
   | { type: 'act2_start' }
   | { type: 'snapshot'; op: 'save' | 'load'; name: string }
+  // yaw = absolute heading in radians (world frame), NOT a turn rate.
   | { type: 'ff_input'; fwd: number; strafe: number; yaw: number }

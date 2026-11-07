@@ -13,7 +13,7 @@ export function parseFrame(buf: ArrayBuffer): DroneFrame | null {
   const view = new DataView(buf)
   return {
     channel: view.getUint8(0),
-    seq: view.getUint32(1, true),
+    seq: view.getUint32(1), // big-endian (DataView default)
     jpeg: new Blob([buf.slice(5)], { type: 'image/jpeg' }),
   }
 }

@@ -11,7 +11,7 @@ through two thread-safe queues:
 PROVISIONAL: once S pushes ``sgr/bus.py``, ``start_server`` takes the bus
 queues instead of creating its own. The rest stays the same.
 
-Binary frame wire format: ``[u8 channel][u32 frame_seq little-endian][JPEG]``.
+Binary frame wire format: ``[u8 channel][u32 frame_seq big-endian][JPEG]`` (``sgr.contracts.pack_frame``).
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ import asyncio
 import contextlib
 import json
 import queue
-import struct
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -31,6 +30,8 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+
+from sgr.contracts import pack_frame
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WEB_DIST = REPO_ROOT / "web" / "dist"
@@ -51,7 +52,7 @@ class Frame:
         return f"D{self.channel}-{self.seq}"
 
     def to_bytes(self) -> bytes:
-        return struct.pack("<BI", self.channel, self.seq & 0xFFFFFFFF) + self.jpeg
+        return pack_frame(self.channel, self.seq & 0xFFFFFFFF, self.jpeg)
 
 
 class Hub:
