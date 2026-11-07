@@ -25,7 +25,9 @@ def _loop(test_map, world_cls=World) -> SimLoop:
     world = world_cls(test_map, sc)
     return SimLoop(
         world,
-        Perception(mode="mock", ground_truth=world.ground_truth),
+        Perception(
+            mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight
+        ),
         Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids)),
         sc,
         guidance=Guidance(),
