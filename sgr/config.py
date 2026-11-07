@@ -21,7 +21,7 @@ BELIEF_RES = 0.2  # swarm belief grid
 # Drones
 MAX_SPEED = 1.2  # m/s (§8.2)
 DRONE_RADIUS = 0.25
-DRONE_COLOURS = {"D1": "#4fc3f7", "D2": "#ffb74d", "D3": "#ba68c8", "D4": "#81c784"}
+DRONE_COLOURS = {"D1": "#3373ff", "D2": "#1acce6", "D3": "#cc40d9", "D4": "#ebebf5"}  # = MuJoCo camera colours (P); avoid fire hues
 HEARTBEAT_TIMEOUT = 3.0  # s (§7.4)
 
 # Firefighter (§9)
@@ -29,5 +29,5 @@ FF_SPEED = 1.4  # m/s
 
 # Gemma (§7.3) - P picks the tag in H0-H1 and writes it here
 OLLAMA_URL = "http://localhost:11434/api/chat"
-GEMMA_MODEL_TAG = "gemma4:e4b"  # TODO(P): confirm after the hour-1 bench
-GEMMA_TIMEOUT_S = 4.0
+GEMMA_MODEL_TAG = "gemma4:e4b"  # hour-1 bench: 26/30 correct
+GEMMA_TIMEOUT_S = 8.0  # measured p95 6.3 s on the demo laptop
