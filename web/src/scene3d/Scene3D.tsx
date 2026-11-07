@@ -3,7 +3,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Component, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import { SkeletonUtils, type OrbitControls as OrbitControlsImpl } from 'three-stdlib'
-import type { ClientMsg, Handle, HelloMsg, Transform } from '../contracts'
+import type { ClientMsg, DroneState, Handle, HelloMsg, Transform } from '../contracts'
 import { placeClick, undoClick, type ClickMode } from '../dashboard/clickTool'
 import { useFreeGrid, type FreeGrid } from '../state/grid'
 import { BELIEF_LEGEND, paintBelief } from '../state/beliefPaint'
@@ -462,6 +462,8 @@ const tmpPos = new THREE.Vector3()
 const DIRECTOR_HOLD_S = 6 // how long the auto-director stays on an event
 const FOCUS_BACK = 7 // m south of the focus point
 const FOCUS_UP = 10 // m above it (keeps nearby walls from blocking the view)
+const AUTO_CYCLE_S = 5 // auto mode, no event showing: Overview -> D1 -> D2 -> D3 -> D4, this long each
+const WASD_KEYS = 'wasdqe'
 
 /** sim (x, y, z) -> three.js world position (matches <SimFrame>). */
 const toThree = (x: number, y: number, z: number, out: THREE.Vector3) => out.set(x, z, -y)
@@ -490,19 +492,91 @@ function eventFocus(e: SimEventMsg): [number, number] | null {
   return d ? [d.x, d.y] : null
 }
 
+/** Chase pose: 2.5 m behind and 3 m above the drone (clear of the 2.6 m walls), looking ahead. */
+function chasePose(d: DroneState, pos: THREE.Vector3, target: THREE.Vector3) {
+  if (d.alive) {
+    toThree(d.x - 2.5 * Math.cos(d.yaw), d.y - 2.5 * Math.sin(d.yaw), d.z + 3, pos)
+    toThree(d.x + 2.5 * Math.cos(d.yaw), d.y + 2.5 * Math.sin(d.yaw), 0, target)
+  } else {
+    // a lost drone lies on the floor: look down at it from above instead
+    toThree(d.x, d.y - 1.5, 6, pos)
+    toThree(d.x, d.y, 0, target)
+  }
+}
+
+const isTyping = (e: KeyboardEvent) =>
+  e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement
+
 /**
  * Camera modes:
- *  - auto (default): the "auto-director". Sits on the overview; on each event
- *    with a place (xy or drone) it glides to that spot, holds 6 s, glides back.
- *  - overview / free: orbit controls (overview resets the pose first).
+ *  - auto (default): the "auto-director". On each event with a place (xy or drone) it glides
+ *    to that spot and holds 6 s. In between it cycles Overview -> D1 -> D2 -> D3 -> D4 (alive
+ *    drones only), 5 s each.
+ *  - overview / free: orbit controls (overview resets the pose first), plus WASD to move on the
+ *    ground, Q/E down/up, Shift faster.
  *  - D1..D4: chase camera behind that drone.
  */
-function CameraRig({ mode }: { mode: CamMode }) {
+function CameraRig({ mode, onShot }: { mode: CamMode; onShot: (shot: string) => void }) {
   const controls = useRef<OrbitControlsImpl>(null)
-  const { camera, size } = useThree()
+  const { camera, size, invalidate } = useThree()
   const hello = useSim((s) => s.hello)
   const focus = useRef<{ seq: number; until: number; drone: string | null; xy: [number, number] | null } | null>(null)
   const lastSeq = useRef(0)
+  const lastShot = useRef('')
+  const keys = useRef(new Set<string>())
+
+  // WASD / Q / E / Shift held keys. Ignored while typing and under pointer lock (the Act 2
+  // firefighter view owns WASD there).
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (isTyping(e) || document.pointerLockElement) return
+      const k = e.key.toLowerCase()
+      if (k.length === 1 && WASD_KEYS.includes(k)) {
+        keys.current.add(k)
+        invalidate()
+      }
+      if (e.key === 'Shift') keys.current.add('shift')
+    }
+    const up = (e: KeyboardEvent) => {
+      keys.current.delete(e.key.toLowerCase())
+      if (e.key === 'Shift') keys.current.delete('shift')
+    }
+    const clear = () => keys.current.clear()
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    window.addEventListener('blur', clear)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', clear)
+    }
+  }, [invalidate])
+
+  // WASD moves the camera AND the orbit pivot on the ground plane (three.js is y-up here).
+  useFrame((_, dt) => {
+    const ctl = controls.current
+    if (!ctl || !(mode === 'overview' || mode === 'free') || keys.current.size === 0) return
+    const k = keys.current
+    const fwd = new THREE.Vector3().subVectors(ctl.target, camera.position)
+    fwd.y = 0
+    if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1) // looking straight down: W = north (sim +y = three -z)
+    fwd.normalize()
+    const right = new THREE.Vector3(-fwd.z, 0, fwd.x)
+    const move = new THREE.Vector3()
+    if (k.has('w')) move.add(fwd)
+    if (k.has('s')) move.sub(fwd)
+    if (k.has('d')) move.add(right)
+    if (k.has('a')) move.sub(right)
+    if (k.has('e')) move.y += 1
+    if (k.has('q')) move.y -= 1
+    if (move.lengthSq() === 0) return
+    const speed = Math.max(3, camera.position.distanceTo(ctl.target) * 0.8) * (k.has('shift') ? 3 : 1)
+    move.normalize().multiplyScalar(speed * Math.min(dt, 0.1))
+    camera.position.add(move)
+    ctl.target.add(move)
+    ctl.update()
+    invalidate() // frameloop="demand": keep rendering while a key is held
+  })
 
   // Overview button: jump to the overview pose, then let the user orbit.
   useEffect(() => {
@@ -529,29 +603,33 @@ function CameraRig({ mode }: { mode: CamMode }) {
         if (xy) focus.current = { seq: newest.seq, until: clock.elapsedTime + DIRECTOR_HOLD_S, drone: newest.msg.xy ? null : (newest.msg.drone ?? null), xy }
       }
       const f = focus.current
+      let shot: string
       if (f && clock.elapsedTime < f.until) {
         // Follow a drone while it moves; a fixed xy stays put.
         const d = f.drone ? sim.snap.state?.drones.find((x) => x.id === f.drone) : undefined
         const [fx, fy] = d ? [d.x, d.y] : f.xy!
         toThree(fx, fy, 0, tmpTarget)
         toThree(fx, fy - FOCUS_BACK, FOCUS_UP, tmpPos)
+        shot = 'event'
       } else {
+        // No event showing: cycle Overview -> D1 -> D2 -> D3 -> D4 (alive drones only).
         focus.current = null
-        overviewPose(hello, camera as THREE.PerspectiveCamera, size.width / Math.max(1, size.height), tmpPos, tmpTarget)
+        const alive = (sim.snap.state?.drones ?? []).filter((x) => x.alive)
+        const shots = ['overview', ...alive.map((x) => x.id)]
+        shot = shots[Math.floor(clock.elapsedTime / AUTO_CYCLE_S) % shots.length]
+        const d = alive.find((x) => x.id === shot)
+        if (d) chasePose(d, tmpPos, tmpTarget)
+        else overviewPose(hello, camera as THREE.PerspectiveCamera, size.width / Math.max(1, size.height), tmpPos, tmpTarget)
+      }
+      if (shot !== lastShot.current) {
+        lastShot.current = shot
+        onShot(shot)
       }
       k = 1 - Math.exp(-dt * 2.2) // slower, cinematic glide
     } else {
-      // Chase: 2.5 m behind and 3 m above the drone (clear of the 2.6 m walls), looking ahead.
       const d = sim.snap.state?.drones.find((x) => x.id === mode)
       if (!d) return
-      if (d.alive) {
-        toThree(d.x - 2.5 * Math.cos(d.yaw), d.y - 2.5 * Math.sin(d.yaw), d.z + 3, tmpPos)
-        toThree(d.x + 2.5 * Math.cos(d.yaw), d.y + 2.5 * Math.sin(d.yaw), 0, tmpTarget)
-      } else {
-        // a lost drone lies on the floor: look down at it from above instead
-        toThree(d.x, d.y - 1.5, 6, tmpPos)
-        toThree(d.x, d.y, 0, tmpTarget)
-      }
+      chasePose(d, tmpPos, tmpTarget)
     }
     camera.position.lerp(tmpPos, k)
     if (ctl) {
@@ -567,14 +645,20 @@ function CameraRig({ mode }: { mode: CamMode }) {
 
 export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
   const [mode, setMode] = useState<CamMode>('auto')
+  const [autoShot, setAutoShot] = useState('overview')
   const [clickMode, setClickMode] = useState<ClickMode | null>(null)
   const hello = useSim((s) => s.hello)
   const grid = useFreeGrid(hello?.map.grid_url, hello?.map.resolution)
   const handleCount = useSim((s) => s.state?.click_handles.length ?? 0)
 
-  // Esc leaves click mode.
+  // Esc leaves click mode. WASD in Auto / a chase view switches to Free so the keys move the camera.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setClickMode(null)
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setClickMode(null)
+      if (isTyping(e) || document.pointerLockElement) return
+      const k = e.key.toLowerCase()
+      if (k.length === 1 && WASD_KEYS.includes(k)) setMode((m) => (m === 'overview' || m === 'free' ? m : 'free'))
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
@@ -605,7 +689,7 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
           <Drones />
           <Dressing />
         </SimFrame>
-        <CameraRig mode={mode} />
+        <CameraRig mode={mode} onShot={setAutoShot} />
       </Canvas>
       <div className="click-tool">
         <button className={clickMode === 'debris' ? 'active' : ''} onClick={() => setClickMode(clickMode === 'debris' ? null : 'debris')}>
@@ -624,6 +708,7 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
       </div>
       <div className="scene3d-legend">
         {!hasScan && <span className="muted">no scan.glb: walls from grid.png</span>}
+        {(mode === 'overview' || mode === 'free') && <span className="muted">WASD move · Q/E height · Shift fast</span>}
         {BELIEF_LEGEND.map((l) => (
           <span key={l.label} style={{ color: l.colour }}>
             ■ {l.label}
@@ -633,8 +718,12 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
         <span style={{ color: '#ff4d4f' }}>┅ old route</span>
       </div>
       <div className="view-buttons">
-        <button className={mode === 'auto' ? 'active' : ''} onClick={() => setMode('auto')} title="Auto-director: cuts to each event">
-          Auto
+        <button
+          className={mode === 'auto' ? 'active' : ''}
+          onClick={() => setMode('auto')}
+          title={`Auto-director: cuts to each event; otherwise cycles Overview, D1-D4 every ${AUTO_CYCLE_S} s`}
+        >
+          {mode === 'auto' ? `Auto · ${autoShot === 'overview' ? 'Overview' : autoShot === 'event' ? 'Event' : autoShot}` : 'Auto'}
         </button>
         <button className={mode === 'overview' ? 'active' : ''} onClick={() => setMode('overview')}>
           Overview
