@@ -6,7 +6,6 @@ import { SkeletonUtils, type OrbitControls as OrbitControlsImpl } from 'three-st
 import type { ClientMsg, DroneState, Handle, HelloMsg, Transform } from '../contracts'
 import { placeClick, undoClick, type ClickMode } from '../dashboard/clickTool'
 import { useFreeGrid, type FreeGrid } from '../state/grid'
-import { BELIEF_LEGEND, paintBelief } from '../state/beliefPaint'
 import { sim, useSim, type SimEventMsg } from '../state/store'
 import { DEBRIS_SIZE } from './constants'
 import { Dressing } from './dressing'
@@ -340,49 +339,6 @@ function ClickObjects() {
   )
 }
 
-/**
- * What the swarm believes, painted on the floor: searched (blue tint), blocked (red hatch),
- * fire (orange), danger > 50 °C (amber), unsafe (purple). One texture at belief resolution (0.2 m per pixel),
- * repainted at most 4x a second when the belief grid changes.
- */
-function BeliefOverlay() {
-  const hello = useSim((s) => s.hello)
-  const canvas = useMemo(() => document.createElement('canvas'), [])
-  const texture = useMemo(() => {
-    const t = new THREE.CanvasTexture(canvas)
-    t.magFilter = THREE.NearestFilter
-    t.minFilter = THREE.LinearFilter
-    t.colorSpace = THREE.SRGBColorSpace
-    return t
-  }, [canvas])
-  const version = useRef(-1)
-  const last = useRef(0)
-  const mesh = useRef<THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>>(null)
-  useFrame(({ clock }) => {
-    const b = sim.belief
-    if (!b || b.version === version.current || clock.elapsedTime - last.current < 0.25) return
-    version.current = b.version
-    last.current = clock.elapsedTime
-    const map = mesh.current?.material.map
-    if (!map) return
-    const resized = canvas.width !== b.w || canvas.height !== b.h
-    paintBelief(b, canvas)
-    if (resized) map.dispose() // new size: let three re-upload from scratch
-    map.needsUpdate = true
-  })
-  useEffect(() => () => texture.dispose(), [texture])
-  const b = sim.belief
-  if (!hello || !b) return null
-  const w = b.w * b.res
-  const h = b.h * b.res
-  return (
-    <mesh ref={mesh} position={[w / 2, h / 2, 0.04]} renderOrder={1}>
-      <planeGeometry args={[w, h]} />
-      <meshBasicMaterial map={texture} transparent depthWrite={false} />
-    </mesh>
-  )
-}
-
 /** Judge click tool in 3D: an invisible floor plane; a click on it in Debris/Fire mode places there. */
 function ClickFloor({ mode, onPlace }: { mode: ClickMode | null; onPlace: (x: number, y: number) => void }) {
   const hello = useSim((s) => s.hello)
@@ -669,7 +625,6 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [send])
   const drones = useSim((s) => s.hello?.drones ?? NO_DRONES)
-  const hasScan = useSim((s) => !!s.hello?.transform)
   const mapCentre: [number, number, number] = hello
     ? [(hello.map.size[0] * hello.map.resolution) / 2, 0, -(hello.map.size[1] * hello.map.resolution) / 2]
     : [0, 0, 0]
@@ -695,7 +650,6 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
         <directionalLight position={[10, 30, 10]} intensity={0.8} />
         <SimFrame>
           <Environment />
-          <BeliefOverlay />
           <ClickFloor mode={clickMode} onPlace={(x, y) => clickMode && placeClick(send, grid, clickMode, x, y)} />
           <Routes />
           <ClickObjects />
@@ -710,16 +664,6 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
           Click the floor to drop {clickMode} · Esc to cancel
         </div>
       )}
-      <div className="scene3d-legend">
-        {!hasScan && <span className="muted">no scan.glb: walls from grid.png</span>}
-        {BELIEF_LEGEND.map((l) => (
-          <span key={l.label} style={{ color: l.colour }}>
-            ■ {l.label}
-          </span>
-        ))}
-        <span style={{ color: '#3ddc84' }}>━ route</span>
-        <span style={{ color: '#ff4d4f' }}>┅ old route</span>
-      </div>
       <div className="view-buttons">
         <button
           className={mode === 'auto' ? 'active' : ''}
@@ -735,7 +679,6 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
           <button
             key={d.id}
             className={mode === d.id ? 'active' : ''}
-            style={{ color: d.colour }}
             onClick={() => setMode(d.id)}
           >
             {d.id}

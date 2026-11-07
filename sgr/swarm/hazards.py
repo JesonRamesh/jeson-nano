@@ -25,17 +25,27 @@ from sgr.contracts import Detection, Evidence, Pose, SurvivorState
 from .agent import Agent
 from .belief import FIRE, FREE, WALL, BeliefGrid
 from .blackboard import Blackboard
-from .planner import DistanceField, cost_map, path_hits
+from .planner import NO_STAY, DistanceField, cost_map, path_hits
 from .trace import Trace
 
 FIRE_RADIUS_M = 0.5  # cells this close to a confirmed fire become `fire`
 DANGER_RADIUS_M = 0.6
 HOLD_TIMEOUT_S = config.GEMMA_TIMEOUT_S + 2.0  # stop holding if Gemma never answers
 APPROACH_TIMEOUT_S = 25.0  # can't reach a standoff point: ask from where we are
-HOT_M = 3.0  # assume a confirmed fire is too hot (> 70 °C) this close: heat_norm 1 ...
-WARM_M = 4.0  # ... fading to 0 here (planner cost; no exploration goals in the hot core)
+HOT_M = 3.0  # a confirmed fire is over the drones' 70 °C limit this close (heat_norm >= 1: drones never enter)
+WARM_M = 6.0  # heat is modelled out to here (planner cost keeps routes as far from fires as space allows)
+HEAT_PEAK_C = 380.0  # assumed fire heat profile: ambient + peak * exp(-d^2 / (2 sigma^2)), the physics the
+HEAT_SIGMA_M = 1.5  # drones' thermometers measure (a property of fire, not hidden scenario truth)
+HEAT_NORM_MAX = 4.0
 RETREAT_CLEAR_M = 3.5  # retreat to the nearest reachable spot at least this far from the heat
 RETREAT_COOLDOWN_S = 4.0
+CROSS_MAX_C = 150.0  # a drone crossing heat along its path retreats anyway above this ...
+CROSS_MAX_S = 6.0  # ... or if it has been over 70 °C this long (stuck in the heat)
+LOCATE_WINDOW_S = 3.0  # thermometer readings used to locate an unseen heat source
+LOCATE_R_M = 5.0  # search radius for it
+SUSPECT_NORM_MAX = 2.0  # a thermometer estimate can be off (mirror ambiguity): drones avoid stopping there and
+#                        cross it as briefly as possible, but only a camera-confirmed fire may seal a passage
+RELOCATE_M = 1.0  # re-plan a retreat when the source estimate moves this much
 REJECTED_MERGE_M = 1.0  # a new detection this close to a rejected one (same label) is ignored
 _RING = np.radians(np.arange(0, 360, 15))
 
@@ -61,6 +71,9 @@ class Hazards:
     active: dict[str, Inspection] = field(default_factory=dict)
     done: set[str] = field(default_factory=set)  # detection ids already settled
     _last_retreat: dict[str, float] = field(default_factory=dict)
+    _retreat_src: dict[str, tuple[float, float]] = field(default_factory=dict)  # what each retreat flees from
+    _suspects: dict[str, tuple[float, float]] = field(default_factory=dict)  # heat sources located by thermometer
+    _hot_since: dict[str, float] = field(default_factory=dict)  # when each drone went over 70 °C
     rejected: list[tuple[str, float, float]] = field(default_factory=list)  # (label, x, y) ruled out before
     fresh_fire: list[tuple[str, str, list[tuple[int, int]]]] = field(default_factory=list)  # (sensor, drone, cells)
 
@@ -179,26 +192,44 @@ class Hazards:
     # ------------------------------------------------------------------ heat
     def heat(self, t: float, drone: str, pose: Pose, temp: float, agent: Agent) -> None:
         if temp > config.HEAT_DANGER_C:
-            norm = min(1.0, (temp - config.AMBIENT_C) / (config.HEAT_RETREAT_C - config.AMBIENT_C))
+            norm = min(HEAT_NORM_MAX, (temp - config.AMBIENT_C) / (config.HEAT_RETREAT_C - config.AMBIENT_C))
             for i, j in self._disc(pose.x, pose.y, DANGER_RADIUS_M):
                 self.belief.heat[j, i] = max(self.belief.heat[j, i], norm)
                 if self.belief.state[j, i] == FREE:
                     self.belief.set_state(i, j, "danger")
-        if (temp > config.HEAT_RETREAT_C and agent.mode != "RETREAT"
+        est = self._locate_heat(t, agent) if temp > config.HEAT_DANGER_C else None
+        if est is not None:
+            self._suspect_heat(drone, est)
+        if temp <= config.HEAT_RETREAT_C:
+            self._hot_since.pop(drone, None)
+        else:
+            self._hot_since.setdefault(drone, t)
+        crossing = (agent.crossing and temp < CROSS_MAX_C
+                    and t - self._hot_since.get(drone, t) < CROSS_MAX_S)  # a short pass along its path
+        if (temp > config.HEAT_RETREAT_C and agent.mode != "RETREAT" and not crossing
                 and t - self._last_retreat.get(drone, -math.inf) > RETREAT_COOLDOWN_S):
             self._last_retreat[drone] = t
-            src = self._heat_source(pose)
+            src = est or self._heat_source(pose)
+            self._retreat_src[drone] = src
             agent.retreat(self._retreat_path(pose, src), self._away(pose, src))
             self.trace.log(t, drone, "RETREAT", f"{drone} at {temp:.0f} °C (limit {config.HEAT_RETREAT_C:.0f}): "
                                                 "backing off 3 m", Evidence(sensor="temp", value=round(temp, 1)))
             self.bb.add_hazard("danger", (pose.x, pose.y), "temp", t)
+        elif agent.mode == "RETREAT" and est is not None:
+            old = self._retreat_src.get(drone)
+            if old is None or math.dist(old, est) > RELOCATE_M:  # the source estimate moved: re-plan the way out
+                self._retreat_src[drone] = est
+                agent.retreat(self._retreat_path(pose, est), self._away(pose, est))
 
     # ------------------------------------------------------------------ helpers
     def mark_fire(self, xy: tuple[float, float], agents: dict[str, Agent]) -> list[tuple[int, int]]:
-        for i, j in self._disc(*xy, WARM_M):  # assumed hot zone around the fire
+        hot_c = config.HEAT_RETREAT_C - config.AMBIENT_C
+        for i, j in self._disc(*xy, WARM_M):  # modelled heat around the fire: closer = much hotter
             cx, cy = self.belief.cell_center(i, j)
-            norm = min(1.0, max(0.0, (WARM_M - math.hypot(cx - xy[0], cy - xy[1])) / (WARM_M - HOT_M)))
-            self.belief.heat[j, i] = max(self.belief.heat[j, i], norm)
+            d2 = (cx - xy[0]) ** 2 + (cy - xy[1]) ** 2
+            norm = min(HEAT_NORM_MAX, HEAT_PEAK_C * math.exp(-d2 / (2 * HEAT_SIGMA_M ** 2)) / hot_c)
+            if norm > 0.02:
+                self.belief.heat[j, i] = max(self.belief.heat[j, i], norm)
         self.belief.version += 1  # heat changed: planner costs must refresh
         new = []
         for i, j in self._disc(*xy, FIRE_RADIUS_M):
@@ -237,6 +268,8 @@ class Hazards:
             i, j = self.belief.world_to_cell(px, py)
             if not (self.belief.inside(i, j) and cm.traversable[j, i]) or not self._los((px, py), target):
                 continue
+            if self.belief.heat[j, i] >= NO_STAY:  # it hovers there: under the 70 °C limit
+                continue
             c = df.cost[j, i] if df else 0.0
             if c < bc:
                 best, bc = (px, py), c
@@ -262,6 +295,44 @@ class Hazards:
                     if math.hypot(cx - x, cy - y) <= r:
                         out.append((i, j))
         return out
+
+    def _locate_heat(self, t: float, agent: Agent) -> tuple[float, float] | None:
+        """Where is the heat coming from? Trilaterate from this drone's own recent readings with the fire heat
+        profile (temp -> distance). Works before any camera has confirmed the fire (e.g. a sudden flare-up).
+        Needs >= 3 warm readings spread over >= 0.4 m; returns the centre of the best-fit candidates."""
+        hot_c = config.AMBIENT_C + 15.0
+        pts = [(x, y, tc) for ts, x, y, tc in agent.thermo if t - ts <= LOCATE_WINDOW_S and tc > hot_c]
+        if len(pts) < 3:
+            return None
+        xs, ys = np.array([p[0] for p in pts]), np.array([p[1] for p in pts])
+        if math.hypot(xs.max() - xs.min(), ys.max() - ys.min()) < 0.4:
+            return None
+        rise = np.clip((np.array([p[2] for p in pts]) - config.AMBIENT_C) / HEAT_PEAK_C, 1e-6, 1.0)
+        d = np.sqrt(-2 * HEAT_SIGMA_M ** 2 * np.log(rise))  # distance each reading implies
+        cx, cy = xs[-1], ys[-1]
+        g = np.arange(-LOCATE_R_M, LOCATE_R_M + 1e-9, 0.2)
+        gx, gy = np.meshgrid(cx + g, cy + g)
+        err = np.zeros_like(gx)
+        for k in range(len(pts)):
+            err += (np.hypot(gx - xs[k], gy - ys[k]) - d[k]) ** 2
+        good = err <= err.min() * 1.15 + 1e-3  # flying straight leaves a mirror ambiguity: take the centre
+        return float(gx[good].mean()), float(gy[good].mean())
+
+    def _suspect_heat(self, drone: str, est: tuple[float, float]) -> None:
+        """Put the estimated source's modelled heat on the map, so drones plan round it (no fire cells: only
+        a camera confirms a fire). Updated only when the estimate moves, to keep the planner cache warm."""
+        old = self._suspects.get(drone)
+        if old is not None and math.dist(old, est) < 0.5:
+            return
+        self._suspects[drone] = est
+        hot_c = config.HEAT_RETREAT_C - config.AMBIENT_C
+        for i, j in self._disc(*est, WARM_M):
+            cx, cy = self.belief.cell_center(i, j)
+            norm = min(SUSPECT_NORM_MAX, HEAT_PEAK_C * math.exp(-((cx - est[0]) ** 2 + (cy - est[1]) ** 2)
+                                                               / (2 * HEAT_SIGMA_M ** 2)) / hot_c)
+            if norm > 0.02:
+                self.belief.heat[j, i] = max(self.belief.heat[j, i], norm)
+        self.belief.version += 1
 
     def _heat_source(self, pose: Pose) -> tuple[float, float] | None:
         """Where the heat comes from: the nearest confirmed fire, else the hottest danger cell seen."""
@@ -295,6 +366,8 @@ class Hazards:
         for h in self.bb.hazards.values():  # two fires close together: don't flee one into the other
             if h.kind == "fire":
                 far &= np.hypot(cx - h.xy[0], cy - h.xy[1]) >= RETREAT_CLEAR_M
+        for sx, sy in self._suspects.values():  # nor into one only a thermometer has located
+            far &= np.hypot(cx - sx, cy - sy) >= RETREAT_CLEAR_M
         far &= b.heat < 0.5
         goal = df.nearest(far)
         return df.path_to(goal) if goal is not None else None

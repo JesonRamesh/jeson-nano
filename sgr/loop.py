@@ -46,10 +46,15 @@ from sgr.contracts import (
     TraceMsg,
     TraceRow,
     UndoMsg,
+    VelCmd,
 )
 
+GUIDANCE_HOT_C = 60.0  # at/above this the swarm (not Guidance) moves the drone: it never enters > 70 °C
+GUIDANCE_COOL_C = 45.0  # ... and keeps it until it has cooled below this
 RESYNC_S = 5.0  # wall seconds between full belief-map resyncs (late-joining browsers catch up)
 FLARE_NEAR_M = 3.7  # flare-up hits the drone nearest a fire if this close: the watcher AT its post (3.3 m)
+FLARE_CORRIDOR_M = 3.0  # never flare a drone this close to a corridor (its > 150 °C core would seal it for drones)
+FLARE_FALLBACK_M = 6.0  # after the wait: the drone nearest a fire if this close, else no flare-up
 FLARE_MAX_WAIT_S = 30.0  # flare.t is a "not before": wait this long for a drone to be near a fire
 _WAIT = "__wait__"  # _flare_victim(): nobody near a fire yet, keep the flare pending
 _MOCK_FRAME = np.zeros((config.CAM_H, config.CAM_W, 3), dtype=np.uint8)
@@ -96,6 +101,7 @@ class SimLoop:
         self.last_snapshot: Path | None = None
         self._reanchor = False  # set when sim time jumps or the speed changes (run() re-paces)
         self._act2_t: float | None = None
+        self._hot: set[str] = set()  # drones Guidance may not steer right now (heat)
         self.summary: SummaryMsg | None = None
 
     # ------------------------------------------------------------------
@@ -169,7 +175,19 @@ class SimLoop:
         if self.guidance is not None:
             if self.act == 2:
                 gmsg, gcmds = self.guidance.tick(self.t, w.ff_pose(), self.swarm_state)
-                cmds = {**cmds, **gcmds}
+                # safety first: Guidance may steer the lead, but never a drone the swarm is pulling out of heat,
+                # nor one already at GUIDANCE_HOT_C (it would drive it back in as soon as a retreat ends)
+                # (with hysteresis: once vetoed, a drone stays with the swarm until it cooled below GUIDANCE_COOL_C,
+                # otherwise the two take turns every tick and the drone jitters at the edge of the heat)
+                self._hot |= {sd.id for sd in self.swarm_state.drones if sd.status == "RETREAT"}
+                self._hot |= {d for d, r in readings.items() if r.temperature >= GUIDANCE_HOT_C}
+                self._hot -= {d for d, r in readings.items() if r.temperature < GUIDANCE_COOL_C}
+                retreating = {sd.id for sd in self.swarm_state.drones if sd.status == "RETREAT"}
+                for d, c in gcmds.items():
+                    if d not in self._hot:
+                        cmds[d] = c
+                    elif d not in retreating:  # too hot to go on: hold at the edge of the heat (RETREAT wins > 70 °C)
+                        cmds[d] = VelCmd(vz=c.vz)
                 self._publish(gmsg)
             else:
                 self.guidance.observe(self.swarm_state)
@@ -229,12 +247,26 @@ class SimLoop:
             p = self.world.drone_pose(d)
             return min(math.hypot(p.x - f.x, p.y - f.y) for f in fires)
 
+        # never a drone in a corridor (the scenario graph is public structure): a fire there could cut the
+        # only way to the survivor for good (no Undo for a flare-up)
+        alive = [d for d in alive if self._corridor_dist(d) >= FLARE_CORRIDOR_M]
+        if not alive:
+            return _WAIT if waited < FLARE_MAX_WAIT_S else None
         best = min(alive, key=dist)
         if dist(best) <= FLARE_NEAR_M:
             return best
         if waited < FLARE_MAX_WAIT_S:
             return _WAIT
-        return self.scenario.flare.target if self.scenario.flare.target in alive else best
+        if dist(best) <= FLARE_FALLBACK_M:  # nobody at a watch post: the drone nearest the fire, if near enough
+            return best
+        print(f"sgr: flare-up skipped: no drone within {FLARE_FALLBACK_M:.0f} m of a fire after {waited:.0f} s")
+        return None  # a flare-up far from the fires could cut the only route: skip the beat instead
+
+    def _corridor_dist(self, drone: str) -> float:
+        from sgr.swarm.rescue import _seg_dist, through_edges  # same rule as the swarm's watch posts
+
+        p = self.world.drone_pose(drone)
+        return min((_seg_dist((p.x, p.y), a, b) for a, b in through_edges(self.scenario.graph)), default=math.inf)
 
     def _submit_frame(self, drone: str, pose: Pose) -> None:
         self._frame_seq += 1

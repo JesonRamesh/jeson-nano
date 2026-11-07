@@ -30,8 +30,9 @@ from .walls import world_to_cell
 
 LIDAR_N = 36
 LIDAR_RANGE = 6.0
-LIDAR_GROUPS = np.array([1, 0, 0, 0, 0, 0], np.uint8)  # walls + debris only
-PIXEL_RAY_GROUPS = np.array([1, 1, 0, 0, 0, 0], np.uint8)  # + fire/survivor/decoy visuals
+LIDAR_GROUPS = np.array([1, 0, 0, 0, 1, 0], np.uint8)  # walls + debris only (walls move to group 4 with the scan)
+PIXEL_RAY_GROUPS = np.array([1, 1, 0, 0, 0, 0], np.uint8)  # what the camera draws: debris, visuals, scan replica
+WALL_GROUP_WITH_SCAN = 4  # box walls + plain floor with the scan replica on: physics/LiDAR/LOS only, never drawn
 PIXEL_RAY_MAX = 30.0
 RENDER_GROUPS = (1, 1, 1, 0, 0, 0)  # group 3 = hidden
 SAFE_DIST = 1.0  # click safety (§10.2)
@@ -117,7 +118,11 @@ class World:
             for g in range(m.ngeom):
                 name = m.geom(g).name
                 if name.startswith("wall") or name == "floor":
-                    m.geom_rgba[g, 3] = 0.0  # not drawn; mj_ray (LiDAR, LOS) still hits them
+                    m.geom_rgba[g, 3] = 0.0  # not drawn
+                    # Own group: LiDAR / LOS still hit them, camera pixel rays don't. Where W closed a doorway in
+                    # grid.png the scan still shows it open: the camera sees a fire through it, and a pixel ray
+                    # that stopped at the invisible box wall put the fire in the doorway (5 m short).
+                    m.geom_group[g] = WALL_GROUP_WITH_SCAN
         self._orig_rgba = m.geom_rgba.copy()
 
         # mocap pools
