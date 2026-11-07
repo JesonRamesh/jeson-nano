@@ -62,6 +62,21 @@ def test_act1_beats(test_map) -> None:
     ), "D3 never declared lost"
 
 
+def test_swarm_covers_test_map(test_map) -> None:
+    """H1-H4 done criterion: 4 drones search >= 90 % of maps/test in under 120 sim-seconds."""
+    loop = _loop(test_map)
+    t90 = None
+    for _ in range(1200):  # 120 s
+        loop.tick()
+        if t90 is None and loop.swarm.coverage() >= 0.90:
+            t90 = loop.t
+    assert t90 is not None, f"coverage only {loop.swarm.coverage():.1%} after 120 s"
+    actions = [r.action for r in loop.trace]
+    assert actions.count("ASSIGN_AREA") >= 4
+    assert "MARK_BLOCKED" in actions  # e2 debris seen by LiDAR
+    assert all(r.evidence.value is not None for r in loop.trace)
+
+
 # ---- FakeWorld sanity (keeps the stub honest for everyone developing against it) ----
 
 
