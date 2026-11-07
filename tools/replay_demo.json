@@ -1,0 +1,41 @@
+{
+  "map": "maps/marshgate-route",
+  "max_t": 320,
+  "expect": [
+    "SURVIVOR_CONFIRMED",
+    "CHAIN_POSITION",
+    "chain_formed",
+    "REPLAN",
+    "chain_ready",
+    "MISSION_COMPLETE"
+  ],
+  "steps": [
+    {
+      "after": "chain_formed",
+      "wait": 8,
+      "do": "click",
+      "mode": "debris",
+      "on_route": 0.55
+    },
+    {
+      "after": "prev",
+      "wait": 12,
+      "do": "undo"
+    },
+    {
+      "after": "chain_ready",
+      "wait": 3,
+      "do": "act2"
+    },
+    {
+      "after": "prev",
+      "wait": 0.5,
+      "do": "ff_autopilot"
+    },
+    {
+      "after": "MISSION_COMPLETE",
+      "wait": 3,
+      "do": "stop"
+    }
+  ]
+}

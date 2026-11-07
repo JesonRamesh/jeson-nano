@@ -7,7 +7,7 @@ One control tick = CONTROL_DT sim seconds:
   7 World.step(SUBSTEPS)     8 publish to the bus
 
 Snapshots (§8.6, when `snapshot_dir` is set): `act1_start` is saved before the first tick and
-`act2_start` when the chain forms. Dashboard buttons: Restart Act 1 (control reset) loads
+`act2_start` once the chain drones are at their posts (phase "chain_ready"). Dashboard buttons: Restart Act 1 (control reset) loads
 `act1_start`, Jump to Act 2 loads `act2_start` (snapshots/ or the committed maps/<name>/act2_start.pkl).
 """
 
@@ -192,9 +192,9 @@ class SimLoop:
         if self.bus is not None and now - self._last_resync >= RESYNC_S:
             self._last_resync = now
             self._publish_full_map()
-        if ss.chain_formed and not self._act2_saved and self.snapshot_dir is not None:
+        if ss.phase == "chain_ready" and not self._act2_saved and self.snapshot_dir is not None:
             self._act2_saved = True
-            self._save("act2_start")  # Jump to Act 2 starts here
+            self._save("act2_start")  # Jump to Act 2 starts here: chain drones at their posts, lead at the entrance
         if self.bus is not None and now - self._last_state_pub >= 1.0 / config.STATE_HZ:
             self._last_state_pub = now
             self._publish(self._state_msg(readings))
@@ -253,8 +253,7 @@ class SimLoop:
             return False
         for msg in self.bus.drain_inbound():
             if isinstance(msg, Act2StartMsg):
-                if self._load("act2_start"):
-                    self.act = 2
+                if self._load("act2_start", act=2):
                     return True
                 continue
             if isinstance(msg, SnapshotMsg):
@@ -264,8 +263,7 @@ class SimLoop:
                     return True
                 continue
             if isinstance(msg, ControlMsg) and msg.action == "reset":
-                if self._load("act1_start"):
-                    self.act = 1
+                if self._load("act1_start", act=1):
                     return True
                 continue
             if isinstance(msg, ClickMsg):
@@ -298,7 +296,7 @@ class SimLoop:
             print(f"sgr: WARNING snapshot '{name}' not saved: {e}")
             return None
 
-    def _load(self, name: str) -> bool:
+    def _load(self, name: str, act: int | None = None) -> bool:
         path = snapshot.find(name, self.snapshot_dir or snapshot.SNAPSHOT_DIR, self.map_dir)
         if path is None:
             print(f"sgr: WARNING no snapshot '{name}' (snapshots/ or {self.map_dir})")
@@ -308,6 +306,8 @@ class SimLoop:
         except Exception as e:
             print(f"sgr: WARNING snapshot '{name}' not loaded: {e}")
             return False
+        if act is not None:
+            self.act = act
         if name == "act2_start":
             self._act2_saved = True  # don't overwrite it from the replayed chain
         print(f"sgr: snapshot '{name}' loaded -> t={self.t:.1f}s act {self.act}")
