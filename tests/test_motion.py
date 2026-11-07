@@ -127,7 +127,7 @@ def test_guidance_never_steers_a_hot_drone(test_map) -> None:
     sent = {}
     orig = world.set_drone_cmd
     world.set_drone_cmd = lambda d, vx, vy, vz, wz: (sent.__setitem__(d, (vx, vy)), orig(d, vx, vy, vz, wz))
-    loop = SimLoop(world, Perception(mode="mock", ground_truth=world.ground_truth),
+    loop = SimLoop(world, Perception(mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight),
                    Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids)), sc, guidance=PushGuidance(),
                    render=False, realtime=False)
     loop.act = 2
@@ -139,7 +139,7 @@ def test_flare_never_hits_a_random_drone(test_map) -> None:
     """After the wait, the old fallback killed scenario.flare.target wherever it was (once: on the only route)."""
     sc = Scenario.load(test_map)
     world = FakeWorld(test_map, sc)  # drones at the entrance, the fire ~9 m away
-    loop = SimLoop(world, Perception(mode="mock", ground_truth=world.ground_truth),
+    loop = SimLoop(world, Perception(mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight),
                    Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids)), sc, render=False, realtime=False)
     assert loop._flare_victim(waited=5.0) == _WAIT
     assert loop._flare_victim(waited=31.0) is None  # nobody near a fire: skip the flare-up
