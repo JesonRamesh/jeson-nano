@@ -488,6 +488,8 @@ def add_placeholders(sc: dict, graph: dict, grid: np.ndarray, pitch: float, deg:
     is_free = lambda x, y: 0 <= int(y / pitch) < h and 0 <= int(x / pitch) < grid.shape[1] and \
         grid[h - 1 - int(y / pitch), int(x / pitch)] > 127
     ex, ey = sc["entrance"]["x"], sc["entrance"]["y"]
+    # keep only placeholder names whose field is still there (and still unedited)
+    sc["_placeholders"] = sorted({k for k in sc.get("_placeholders", []) if k in sc})
     if "survivor" not in sc:
         adj = {n["id"]: [] for n in graph["nodes"]}
         pos = {n["id"]: (n["x"], n["y"]) for n in graph["nodes"]}
@@ -506,6 +508,7 @@ def add_placeholders(sc: dict, graph: dict, grid: np.ndarray, pitch: float, deg:
         ends = [i for i in dist if deg.get(i) == 1] or list(dist)
         far = max(ends, key=dist.get)
         sc["survivor"] = {"x": pos[far][0], "y": pos[far][1], "yaw": 0.0}
+        sc["_placeholders"] = sorted({*sc["_placeholders"], "survivor"})
         print(f"  placeholder: survivor at {far} {pos[far]} ({dist[far]:.1f} m by graph) -- move it in /editor",
               file=sys.stderr)
     if "drones" not in sc:
@@ -520,6 +523,7 @@ def add_placeholders(sc: dict, graph: dict, grid: np.ndarray, pitch: float, deg:
             if len(starts) == 4:
                 break
         sc["drones"] = {"ids": ["D1", "D2", "D3", "D4"], "start": [list(p) for p in starts], "altitude": 1.6}
+        sc["_placeholders"] = sorted({*sc["_placeholders"], "drones"})
         print(f"  placeholder: drone starts {starts} -- move them in /editor", file=sys.stderr)
 
 
