@@ -127,7 +127,9 @@ function Environment() {
   return (
     <>
       {/* Neutral floor under everything: holes / unscanned parts of the scan read as floor, not black. */}
-      <mesh position={[w / 2, h / 2, -0.03]}>
+      {/* At -0.15 m: below the lowest scanned floor (W's scan drifts from +7 cm at the
+          entrance to -5 cm at the survivor), so it never covers the real floor. */}
+      <mesh position={[w / 2, h / 2, -0.15]}>
         <planeGeometry args={[w, h]} />
         <meshBasicMaterial color="#77736d" /> {/* unlit like the scan: concrete grey, never black */}
       </mesh>
@@ -340,7 +342,7 @@ function ClickObjects() {
 
 /**
  * What the swarm believes, painted on the floor: searched (blue tint), blocked (red hatch),
- * fire / danger (orange), unsafe (purple). One texture at belief resolution (0.2 m per pixel),
+ * fire (orange), danger > 50 °C (amber), unsafe (purple). One texture at belief resolution (0.2 m per pixel),
  * repainted at most 4x a second when the belief grid changes.
  */
 function BeliefOverlay() {
