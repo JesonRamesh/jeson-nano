@@ -48,3 +48,36 @@ function DroneModel({ colour }: { colour: string }) {
 
 Lost drone: the model already falls with the group (`z = 0.25`); stop the props and set
 the `accent` / `nav_*` emissive to black.
+
+## Disaster dressing: `<Dressing />`
+
+Fog, red emergency beacons, floating dust; fire (flames, smoke that rises and spreads
+under the ceiling, embers, flickering light, scorch); rubble piles (mound, chunks,
+slabs, leaning beam, rebar, dust). All procedural: no files, works offline, CC0.
+
+**Mount (D, one line inside `<SimFrame>` in `Scene3D.tsx`):**
+
+```tsx
+import { Dressing } from './dressing'
+// ...
+<SimFrame>
+  ...
+  <Drones />
+  <Dressing />
+</SimFrame>
+```
+
+- **What it shows (default `reveal="belief"`):** only what the swarm has found. Belief
+  `fire` cells become fires (this includes the flare-up), and `blocked_new` cells become
+  rubble (about one pile per metre of detected debris face). Judge clicks
+  (`state.click_handles`) are dressed straight away. It never reads hidden scenario
+  fields, so the dashboard rule on `/api/maps/{name}/scenario` holds.
+- `reveal="world"` shows the scenario's real fires and debris from the start, using that
+  editor-only endpoint. Only use it where the team agrees, e.g. the firefighter view.
+- **Your click objects:** keep or drop your cones and boxes. `RubblePile` and `FireFX` are
+  exported if you'd rather render clicks yourself.
+- **Switches:** `?dressing=off` and `?dressing=lite` (no smoke or dust, thinner fog).
+- **Cost:** not measurable on an M4 Pro at 1080p (700–800 FPS with or without it).
+  Lights: 4 beacons plus 1 per fire.
+- **Preview without the sim:** `npm run dev` + `uv run python -m sgr.server.dev --map maps/<name>`, then
+  open `/src/scene3d/dressing/preview.html?map=<name>&view=overview|fire|rubble|corridor|hall`.

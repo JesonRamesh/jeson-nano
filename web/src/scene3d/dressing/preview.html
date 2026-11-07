@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dressing preview</title>
+    <style>
+      html, body, #root { margin: 0; height: 100%; background: #0e1014; }
+      #hud { position: fixed; left: 12px; top: 10px; color: #ddd; font: 13px/1.4 system-ui, sans-serif; }
+      #hud a { color: #9db4ff; margin-right: 10px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="hud">
+      Dressing preview (dev only):
+      <a href="?view=overview">overview</a><a href="?view=fire">fire</a><a href="?view=rubble">rubble</a>
+      <a href="?view=corridor">corridor</a><a href="?view=hall">hall</a> · add &amp;dressing=off / lite
+    </div>
+    <script type="module" src="./preview.tsx"></script>
+  </body>
+</html>
