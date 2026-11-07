@@ -1,0 +1,73 @@
+.dash {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.topbar {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.conn-connected { color: var(--ok); }
+.conn-connecting { color: var(--warn); }
+.conn-disconnected { color: var(--bad); }
+
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); }
+.bad { color: var(--bad); font-weight: 700; }
+
+.grid4 {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 12px;
+  padding: 12px;
+  min-height: 0;
+}
+
+.drone-panel {
+  display: flex;
+  flex-direction: column;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  min-height: 0;
+}
+
+.drone-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+}
+
+.drone-cam {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #000;
+}
+
+.drone-cam img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.signal-lost {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--bad);
+  background: repeating-linear-gradient(0deg, #111 0 2px, #222 2px 4px);
+}
