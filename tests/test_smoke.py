@@ -123,3 +123,38 @@ def test_fake_world_change_tool_and_heat(test_map) -> None:
     w.remove(f)
     w.set_state(state)
     assert len(w.ground_truth().fires) == len(sc.fires) + 1
+
+
+# ---- loop wiring (S): re-look forwarding, Guidance in Act 1, Budget publishing ----
+
+
+def test_loop_wiring_relook_guidance_budget(test_map) -> None:
+    from sgr.bus import Bus
+    from sgr.contracts import BudgetMsg, SwarmState, parse_server_message
+    from sgr.perception.budget import Budget
+
+    sc = Scenario.load(test_map)
+    world = FakeWorld(test_map, sc)
+    prior = PriorMap.from_map(test_map, sc)
+    perception = Perception(mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight)
+    asked: list[str] = []
+    perception.request_relook = asked.append  # type: ignore[method-assign]
+
+    class AskingSwarm(Swarm):
+        def tick(self, t, readings, detections):
+            cmds, rows, state = super().tick(t, readings, detections)
+            return cmds, rows, state.model_copy(update={"relook_requests": ["det0001"]})
+
+    observed: list[SwarmState] = []
+    guidance = Guidance(prior=prior, world=world)
+    guidance.observe = observed.append  # type: ignore[method-assign]
+    bus = Bus()
+    budget = Budget(net_probe=lambda: False, vram_probe=lambda: None, start=False)
+    loop = SimLoop(world, perception, AskingSwarm(prior, list(sc.drones.ids)), sc, guidance=guidance, bus=bus,
+                   budget=budget, render=False, realtime=False)
+    loop.run(max_ticks=5)
+    assert asked == ["det0001"] * 5  # every request reaches Perception.request_relook
+    assert len(observed) == 5  # Act 1: guidance sees every tick's map_delta
+    msgs = [parse_server_message(o.text) for o in bus.drain_outbound() if hasattr(o, "text")]
+    budgets = [m for m in msgs if isinstance(m, BudgetMsg)]
+    assert budgets and budgets[0].network == "unknown"  # probes not started; message still flows
