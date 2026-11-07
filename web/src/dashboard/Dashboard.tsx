@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useSocket } from '../net/useSocket'
+import { FirefighterView } from '../scene3d/FirefighterView'
 import { Scene3D } from '../scene3d/Scene3D'
+import type { SummaryMsg } from '../contracts'
 import { sim, useSim } from '../state/store'
 import { Toasts } from '../ui/Toasts'
 import { Banners } from './Banners'
@@ -14,6 +16,7 @@ const TEMP_LIMIT_C = 70 // §7.4 retreat threshold
 const MAP_TILE = 'map'
 const LOG_TILE = 'log'
 const NET_TILE = 'net'
+const FF_TILE = 'ff'
 const FLIP_MS = 420
 
 /** Browser full screen for the whole dashboard; also toggled with the F key. */
@@ -22,7 +25,7 @@ function useFullscreen() {
   useEffect(() => {
     const sync = () => setOn(!!document.fullscreenElement)
     const onKey = (e: KeyboardEvent) => {
-      if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey) return
+      if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey || document.pointerLockElement) return
       if (e.key === 'f' || e.key === 'F') toggleFullscreen()
     }
     document.addEventListener('fullscreenchange', sync)
@@ -99,6 +102,7 @@ function useFlip() {
 function Tile({
   id,
   slot,
+  rows,
   focus,
   label,
   register,
@@ -108,6 +112,7 @@ function Tile({
 }: {
   id: string
   slot: number // position in the default grid: 0 = map, 1-4 = drone feeds, 5 = log, 6 = links
+  rows: number // rail length while something is focused
   focus: string | null
   label: string
   register: (el: HTMLElement | null) => void
@@ -121,9 +126,9 @@ function Tile({
   return (
     <section
       ref={register}
-      className={`tile tile-${role} tile-${id === MAP_TILE ? 'map' : id === LOG_TILE ? 'log' : id === NET_TILE ? 'net' : 'feed'}`}
+      className={`tile tile-${role} tile-${id === MAP_TILE ? 'map' : id === LOG_TILE ? 'log' : id === NET_TILE ? 'net' : id === FF_TILE ? 'ff' : 'feed'}`}
       style={
-        focus === null ? { gridArea: `t${slot}` } : isFocused ? { gridArea: '1 / 1 / 7 / 2' } : { gridColumn: '2' }
+        focus === null ? { gridArea: `t${slot}` } : isFocused ? { gridArea: `1 / 1 / ${rows + 1} / 2` } : { gridColumn: '2' }
       }
       onPointerDown={(e) => (down.current = { x: e.clientX, y: e.clientY })}
       onClick={(e) => {
@@ -187,8 +192,25 @@ export default function Dashboard() {
     return () => clearTimeout(t)
   }, [status])
 
+  // ---- acts ----
+  // Act 2: the firefighter view takes the stage; the 3D map, log and links sit in the rail;
+  // drone feeds are hidden (spec §10.1). "All views" / Esc in Act 2 comes back to the FF view.
+  const act = state?.act ?? 1
+  const phase = state?.phase ?? ''
+  const sendAct2 = useCallback(() => send({ type: 'act2_start' }), [send])
+  useEffect(() => {
+    // G = send in the firefighter (loads the act2_start snapshot: chain at its posts)
+    const onKey = (e: KeyboardEvent) => {
+      if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey || document.pointerLockElement) return
+      if ((e.key === 'g' || e.key === 'G') && sim.snap.state?.act !== 2) sendAct2()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [sendAct2])
+
   // ---- focus + smooth re-arrangement ----
-  const [focus, setFocusState] = useState<string | null>(null)
+  const [focusState, setFocusState] = useState<string | null>(null)
+  const focus = focusState ?? (act === 2 ? FF_TILE : null)
   const flip = useFlip()
   const setFocus = useCallback(
     (next: string | null) => {
@@ -198,25 +220,37 @@ export default function Dashboard() {
     [flip],
   )
   useLayoutEffect(() => flip.play(), [focus, flip])
+  // a new act starts from its default arrangement
+  const prevAct = useRef(act)
+  useEffect(() => {
+    if (prevAct.current === act) return
+    prevAct.current = act
+    const t = setTimeout(() => setFocus(null), 0)
+    return () => clearTimeout(t)
+  }, [act, setFocus])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isTyping(e) || e.key !== 'Escape' || focus === null) return
+      if (isTyping(e) || e.key !== 'Escape' || focusState === null) return
       if (document.querySelector('.scene3d.click-mode')) return // Esc cancels the click tool first
       setFocus(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [focus, setFocus])
+  }, [focusState, setFocus])
 
+  const visible = act === 2 ? 4 : 7 // tiles on the stage
   const tileProps = (id: string, slot: number, label: string) => ({
     id,
     slot,
+    rows: visible - 1,
     label,
     focus,
     register: flip.register(id),
     onFocus: (t: string) => setFocus(t),
     onBack: () => setFocus(null),
   })
+  const summary = useSim((s) => s.summary)
+  const [summaryHidden, setSummaryHidden] = useState<SummaryMsg | null>(null)
 
   return (
     <div className="dash">
@@ -225,11 +259,45 @@ export default function Dashboard() {
       {linkDown && <div className="link-pill">{status === 'connecting' ? 'Connecting to sim' : 'Sim link lost, reconnecting'}</div>}
       {versionMismatch && <div className="link-pill bad">Contract mismatch: server v{hello?.contract_version}</div>}
 
-      <main className={`stage ${focus === null ? 'stage-grid' : 'stage-focus'}`}>
+      {act === 1 && phase === 'chain_ready' && (
+        <button className="act2-btn" onClick={sendAct2} title="Start Act 2 (G)">
+          Send in firefighter <kbd>G</kbd>
+        </button>
+      )}
+      {summary && summaryHidden !== summary && (
+        <div className="summary-card">
+          <h2>Mission complete</h2>
+          <dl>
+            <dt>Time</dt>
+            <dd>{summary.time_s.toFixed(0)} s</dd>
+            <dt>Distance walked</dt>
+            <dd>{summary.distance_m.toFixed(0)} m</dd>
+            <dt>Hazards avoided</dt>
+            <dd>{summary.hazards_avoided}</dd>
+            <dt>Corrections</dt>
+            <dd>{summary.corrections}</dd>
+            <dt>Re-plans</dt>
+            <dd>{summary.replans}</dd>
+          </dl>
+          <button className="btn" onClick={() => setSummaryHidden(summary)}>
+            Close
+          </button>
+        </div>
+      )}
+
+      <main
+        className={`stage ${focus === null ? 'stage-grid' : 'stage-focus'}`}
+        style={focus === null ? undefined : { gridTemplateRows: `repeat(${visible - 1}, minmax(0, 1fr))` }}
+      >
+        {act === 2 && (
+          <Tile {...tileProps(FF_TILE, 7, 'Firefighter view')}>
+            <FirefighterView send={send} />
+          </Tile>
+        )}
         <Tile {...tileProps(MAP_TILE, 0, '3D map')}>
           <Scene3D send={send} />
         </Tile>
-        {drones.map((d, i) => (
+        {act === 1 && drones.map((d, i) => (
           <Tile key={d.id} {...tileProps(d.id, i + 1, `${d.id} camera`)}>
             <DronePanel
               ref={(h) => {
