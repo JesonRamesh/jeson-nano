@@ -1,0 +1,43 @@
+{
+  "map": "maps/marshgate-route",
+  "max_t": 320,
+  "expect": [
+    "SURVIVOR_CONFIRMED",
+    "CHAIN_POSITION",
+    "chain_formed",
+    "REPLAN",
+    "chain_ready",
+    "MISSION_COMPLETE"
+  ],
+  "steps": [
+    {
+      "after": "chain_formed",
+      "wait": 8,
+      "do": "click",
+      "mode": "debris",
+      "x": 5.8,
+      "y": 24.8
+    },
+    {
+      "after": "prev",
+      "wait": 12,
+      "do": "undo"
+    },
+    {
+      "after": "chain_ready",
+      "wait": 3,
+      "do": "act2"
+    },
+    {
+      "after": "prev",
+      "wait": 0.5,
+      "do": "ff_autopilot"
+    },
+    {
+      "after": "MISSION_COMPLETE",
+      "wait": 3,
+      "do": "stop"
+    }
+  ],
+  "_note": "W: marshgate rehearsal. The judge debris click is pinned to (5.8, 24.8), just south of the n4 junction (wide area, D1 in LiDAR range): a visible REPLAN detour. on_route 0.55 lands in the narrow n8-n9 corridor out of every chain drone's range (undetected). Re-check with tools/replay.py after any map change."
+}
