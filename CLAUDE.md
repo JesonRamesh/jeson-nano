@@ -67,7 +67,8 @@ tests/           test_smoke.py (merge gate), test_honesty.py, test_contracts.py
 - Tests (must pass before every merge): `uv run pytest -q`
 - Render check: `uv run python -m sgr.tools.render_smoke` (writes `render_smoke.png`)
 - Regenerate the test map: `uv run python tools/make_test_map.py`
-- Run headless: `uv run sgr --map maps/test --no-render --max-ticks 600`
+- Run headless: `uv run sgr --map maps/test --no-render --no-server --max-ticks 600`
+- Run with the dashboard: `uv run sgr --map maps/marshgate-route --perception mock` -> http://127.0.0.1:8000 (snapshots in `snapshots/`)
 
 ## Working habits (spec §15.1)
 

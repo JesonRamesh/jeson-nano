@@ -22,6 +22,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--speed", type=float, default=1.0, help="sim speed multiplier (2.5 for the video)")
     p.add_argument("--no-render", action="store_true", help="skip camera rendering (mock frames)")
     p.add_argument("--max-ticks", type=int, default=None, help="stop after N control ticks (testing)")
+    p.add_argument("--no-server", action="store_true", help="don't start the dashboard server (headless runs)")
+    p.add_argument("--host", default="127.0.0.1", help="dashboard host")
+    p.add_argument("--port", type=int, default=8000, help="dashboard port")
+    p.add_argument("--snapshots", type=Path, default=Path("snapshots"),
+                   help="where act1_start / act2_start / named snapshots are saved (§8.6)")
     return p
 
 
@@ -39,7 +44,10 @@ def main(argv: list[str] | None = None) -> int:
     swarm = Swarm(prior, list(scenario.drones.ids))
     bus = Bus()
     budget = Budget()  # network / VRAM probes on a daemon thread; rates from the loop hooks
-    # TODO(D): start sgr.server on a background thread here, passing `bus` (§3).
+    if not args.no_server:
+        from sgr.server.server import start_server
+
+        start_server(bus, args.map, scenario, args.host, args.port)  # daemon thread (§3)
     loop = SimLoop(
         world,
         perception,
@@ -50,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
         budget=budget,
         speed=args.speed,
         render=not args.no_render,
+        map_dir=args.map,
+        snapshot_dir=args.snapshots,
     )
     print(f"sgr: map={args.map} perception={args.perception} speed={args.speed} render={not args.no_render}")
     try:

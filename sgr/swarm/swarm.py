@@ -12,6 +12,7 @@ Next: survivor route + REPLAN + chain.
 from __future__ import annotations
 
 import math
+import pickle
 
 import numpy as np
 
@@ -19,6 +20,7 @@ from sgr.contracts import (
     Detection,
     Evidence,
     OldRoute,
+    Pose,
     PriorMap,
     Readings,
     SwarmDrone,
@@ -29,7 +31,7 @@ from sgr.contracts import (
 
 from .agent import Agent
 from .areas import Area, assign, release, split_areas
-from .belief import BeliefGrid
+from .belief import FREE, UNSAFE, BeliefGrid
 from .blackboard import Blackboard
 from .coverage import camera_footprint
 from .hazards import Hazards
@@ -115,6 +117,15 @@ class Swarm:
     def coverage(self) -> float:
         return self.belief.coverage()
 
+    # ------------------------------------------------------------------ snapshots (§8.6)
+    def get_state(self) -> bytes:
+        """Blackboard, belief, agents, trace, hazards, rescue: everything but the prior map."""
+        return pickle.dumps({k: v for k, v in self.__dict__.items() if k != "prior"},
+                            protocol=pickle.HIGHEST_PROTOCOL)
+
+    def set_state(self, b: bytes) -> None:
+        self.__dict__.update(pickle.loads(b))
+
     # ------------------------------------------------------------------ steps
     def _check_lost(self, t: float) -> None:
         for d in self.bb.newly_lost(t):
@@ -131,9 +142,30 @@ class Swarm:
             if ag.area and ag.area not in freed:
                 freed.append(ag.area)
             ag.set_area(None)
+            ag.unstation()
+            unsafe = self._mark_unsafe(last)  # §8.4: its last area is unsafe until re-observed
+            if unsafe and unsafe not in freed:
+                freed.append(unsafe)
             if freed:
-                self.trace.log(t, "swarm", "REASSIGN", f"{d} lost: area {', '.join(freed)} back to the pool",
-                               Evidence(sensor="heartbeat", value={"drone": d, "areas": freed}))
+                note = f"; area {unsafe} unsafe until re-observed" if unsafe else ""
+                self.trace.log(t, "swarm", "REASSIGN",
+                               f"{d} lost: area {', '.join(freed)} back to the pool{note}",
+                               Evidence(sensor="heartbeat", value={"drone": d, "areas": freed, "unsafe": unsafe}))
+
+    def _mark_unsafe(self, pose: Pose | None) -> str | None:
+        """The area a lost drone was in becomes `unsafe` and unsearched, so another drone re-checks it."""
+        if pose is None:
+            return None
+        i, j = self.belief.world_to_cell(pose.x, pose.y)
+        area = next((a for a in self.areas.values() if self.belief.inside(i, j) and a.mask[j, i]), None)
+        if area is None:
+            return None
+        cells = area.mask & (self.belief.state == FREE)
+        jj, ii = np.nonzero(cells)
+        for a, b in zip(ii.tolist(), jj.tolist()):
+            self.belief.set_state(a, b, "unsafe")
+        self.belief.searched[cells] = False
+        return area.id
 
     def _sense(self, t: float, alive: dict[str, Readings]) -> None:
         free = self.belief.free_mask()
@@ -162,7 +194,11 @@ class Swarm:
                         if blocked and ag.id not in self.bb.lost:
                             self._path_replan(t, d, ag, blocked)
                         ag.invalidate()
-            self.belief.mark_searched(camera_footprint(self.belief, r.pose) & free)
+            seen = camera_footprint(self.belief, r.pose) & free
+            self.belief.mark_searched(seen)
+            jj, ii = np.nonzero(seen & (self.belief.state == UNSAFE))  # re-observed: safe again
+            for a, b in zip(ii.tolist(), jj.tolist()):
+                self.belief.set_state(a, b, "free")
         if self.belief.version != self._excluded_version:  # the map changed: give up-areas another chance
             self._excluded_version = self.belief.version
             for s in self._excluded.values():
