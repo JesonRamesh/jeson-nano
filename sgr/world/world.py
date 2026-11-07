@@ -34,7 +34,7 @@ LIDAR_GROUPS = np.array([1, 0, 0, 0, 1, 0], np.uint8)  # walls + debris only (wa
 PIXEL_RAY_GROUPS = np.array([1, 1, 0, 0, 0, 0], np.uint8)  # what the camera draws: debris, visuals, scan replica
 WALL_GROUP_WITH_SCAN = 4  # box walls + plain floor with the scan replica on: physics/LiDAR/LOS only, never drawn
 PIXEL_RAY_MAX = 30.0
-RENDER_GROUPS = (1, 1, 1, 0, 0, 0)  # group 3 = hidden
+RENDER_GROUPS = (1, 1, 1, 0, 0, 0)  # group 3 = hidden, 4 = walls/collision (never drawn)
 SAFE_DIST = 1.0  # click safety (§10.2)
 FF_WALK = 1.4  # m/s (§9)
 FF_YAW_GAIN = 4.0
@@ -53,6 +53,12 @@ class _Placed:
     slot: int  # mocap pool index
     scenario: bool  # True = from scenario.json (fires / compromised edges), False = click or flare-up
     size: float = 1.5  # fire size (ground truth only)
+
+
+def _smooth(e0: float, e1: float, x):
+    """GLSL smoothstep."""
+    t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
+    return t * t * (3 - 2 * t)
 
 
 def _wrap(a: float) -> float:
@@ -131,6 +137,16 @@ class World:
             "fire": [int(m.body_mocapid[m.body(f"fire{i:02d}").id]) for i in range(mjcf.N_FIRE)],
         }
         self._fire_geoms = [np.flatnonzero(m.geom_bodyid == m.body(f"fire{i:02d}").id) for i in range(mjcf.N_FIRE)]
+        # animated fire parts (W's FireFX look), per pool slot, in the order of shapes.fire_particle_params()
+        gid = lambda nm: m.geom(nm).id if mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, nm) >= 0 else -1  # noqa: E731
+        self._fire_fx = []
+        for i in range(mjcf.N_FIRE):
+            pre = f"fire{i:02d}"
+            fx = {k: np.array([gid(f"{pre}_{k}{j}") for j in range(n)], int)
+                  for k, n in (("p", shapes.FIRE_N_PARTICLES), ("e", shapes.FIRE_N_EMBERS))}
+            fx["core"] = np.array([g for g in self._fire_geoms[i] if m.geom(g).name.split("_")[-1].startswith(("c", "embers"))], int)
+            self._fire_fx.append(fx)
+        self._fire_params = shapes.fire_particle_params()
         self._survivor_xy = (scenario.survivor.x, scenario.survivor.y)
 
         # runtime state (pickled with snapshots)
@@ -204,17 +220,45 @@ class World:
         d.ctrl[self._ff["act"][0]] = FF_WALK * (fwd * c + strafe * s)
         d.ctrl[self._ff["act"][1]] = FF_WALK * (fwd * s - strafe * c)
         d.ctrl[self._ff["act"][2]] = 0.0 if yaw_t is None else FF_YAW_GAIN * _wrap(yaw_t - yaw)
-        self._flicker()
+        self._animate_fires()
         mujoco.mj_step(m, d, nstep=int(n))
 
-    def _flicker(self) -> None:
-        rgba = self.model.geom_rgba
+    def _animate_fires(self) -> None:
+        """Flicker the flame core; move W-style flame particles and embers (fire.tsx shader maths)."""
+        m, t = self.model, float(self.data.time)
+        flames, embers = self._fire_params
         for p in self._placed.values():
             if p.handle.kind != "fire":
                 continue
-            g = self._fire_geoms[p.slot]
-            k = 1.0 + FLICKER * (self._rng.random(len(g)) * 2 - 1)
-            rgba[g, :3] = np.clip(self._orig_rgba[g, :3] * k[:, None], 0, 1)
+            fx = self._fire_fx[p.slot]
+            core = fx["core"]
+            if len(core):
+                k = 1.0 + FLICKER * (self._rng.random(len(core)) * 2 - 1)
+                m.geom_rgba[core, :3] = np.clip(self._orig_rgba[core, :3] * k[:, None], 0, 1)
+            if (fx["p"] >= 0).all():
+                ph, an, rf, sp = flames.T
+                life = np.mod(t * sp + ph, 1.0)
+                ang = an * 2 * np.pi + t * 1.3
+                r = rf * shapes.FLAME_R * (1 - 0.65 * life)
+                sway = np.sin(t * 3.1 + ph * 23) * 0.07 * life
+                m.geom_pos[fx["p"]] = np.stack([np.cos(ang) * r + sway, np.sin(ang) * r, 0.15 + life * shapes.FLAME_H], 1)
+                # bright throughout: MuJoCo has no additive blending, so dim red particles would read as soot
+                c0, c1, c2 = np.array([1.0, 0.9, 0.5]), np.array([1.0, 0.58, 0.1]), np.array([1.0, 0.32, 0.05])
+                a = _smooth(0, 0.35, life)[:, None]
+                col = c0 * (1 - a) + c1 * a
+                b = _smooth(0.45, 0.9, life)[:, None]
+                col = col * (1 - b) + c2 * b
+                alpha = _smooth(0, 0.06, life) * (1 - _smooth(0.35, 0.75, life)) * 0.8
+                m.geom_rgba[fx["p"]] = np.column_stack([col, alpha])
+                sz = 0.11 * (1 - 0.5 * life)
+                m.geom_size[fx["p"]] = np.stack([sz, sz, sz * 1.4], 1)
+            if (fx["e"] >= 0).all():
+                ph, an, rf, sp = embers.T
+                life = np.mod(t * sp + ph, 1.0)
+                ang = an * 2 * np.pi + t * 0.7
+                r = rf * 0.6 + 0.15 * np.sin(t * 2.0 + ph * 10)
+                m.geom_pos[fx["e"]] = np.stack([np.cos(ang) * r, np.sin(ang) * r, 0.3 + life * 2.2], 1)
+                m.geom_rgba[fx["e"], 3] = 0.9 * (1 - _smooth(0.6, 1.0, life))
 
     def set_drone_cmd(self, drone: str, vx: float, vy: float, vz: float, wz: float) -> None:
         self._cmd[drone] = np.array([vx, vy, vz, wz], float)
