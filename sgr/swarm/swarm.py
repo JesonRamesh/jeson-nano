@@ -61,9 +61,11 @@ class Swarm:
 
     # ------------------------------------------------------------------ facade
     def tick(
-        self, t: float, readings: dict[str, Readings], detections: list[Detection]
+        self, t: float, readings: dict[str, Readings], detections: list[Detection], ff: Pose | None = None
     ) -> tuple[dict[str, VelCmd], list[TraceRow], SwarmState]:
+        """`ff` = the firefighter's tracked pose in Act 2 (None in Act 1): re-routes start from it."""
         self.t = t
+        self.rescue.ff = (ff.x, ff.y) if ff is not None else None
         for d, r in readings.items():
             self.bb.heartbeat(d, t, r.pose)
         self._check_lost(t)

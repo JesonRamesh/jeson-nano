@@ -107,3 +107,38 @@ def test_confirmed_fire_gets_a_watcher_away_from_corridors(swarm: Swarm) -> None
     d = ((post[0] - fire[0]) ** 2 + (post[1] - fire[1]) ** 2) ** 0.5
     assert 2.9 <= d <= 3.8  # warm but under the 70 °C retreat limit
     assert any(r.action == "INSPECT" and "keeps its camera on the fire" in r.reason for r in rows)
+
+
+# ---- Act 2 (§9 "Route becomes unsafe"): the firefighter's tracked position drives the re-route ----
+
+
+def _act2(swarm: Swarm, ff: Pose):
+    """Survivor confirmed (route along e2, y = 3), then Act 2 with the firefighter at `ff`."""
+    swarm.tick(0.0, _r(0.0), [_found()])
+    return swarm.tick(0.1, _r(0.1), [], ff=ff)
+
+
+def test_act2_blockage_behind_the_firefighter_is_ignored(swarm: Swarm) -> None:
+    _, _, st = _act2(swarm, Pose(x=16.0, y=3.0))
+    v = st.route.version
+    cells = _block(swarm, 12.0, 2.0, 4.0)  # e2, behind the firefighter at x = 16
+    swarm.rescue.on_new_cells("lidar", "D3", cells)
+    _, rows, st = swarm.tick(0.2, _r(0.2), [], ff=Pose(x=16.0, y=3.0))
+    assert "REPLAN" not in [r.action for r in rows] and st.route.version == v
+
+
+def test_act2_blockage_ahead_replans_from_the_firefighter(swarm: Swarm) -> None:
+    ff = Pose(x=10.0, y=3.0)
+    _act2(swarm, ff)
+    cells = _block(swarm, 14.0, 2.0, 4.0)  # e2, ahead of the firefighter at x = 10
+    swarm.rescue.on_new_cells("lidar", "D3", cells)
+    _, rows, st = swarm.tick(0.2, _r(0.2), [], ff=ff)
+    assert "REPLAN" in [r.action for r in rows]
+    assert st.route.status == "ok"
+    x0, y0 = st.route.points[0]
+    assert abs(x0 - ff.x) < 0.5 and abs(y0 - ff.y) < 0.5  # the new route starts at the firefighter
+    assert not any(abs(y - 3.0) < 0.5 and 13 < x < 15 for x, y in swarm.rescue.path)  # around via n4-n6-n7
+    lead = next(d for d, r in swarm.rescue.roles.items() if r == "lead")
+    near_ff = min(swarm.rescue.roles, key=lambda d: (POSES[d].x - ff.x) ** 2 + (POSES[d].y - ff.y) ** 2)
+    assert lead == near_ff or swarm.rescue.roles[near_ff] == "survivor"
+    assert any(r.action == "CHAIN_POSITION" and "guiding the firefighter" in r.reason for r in rows)

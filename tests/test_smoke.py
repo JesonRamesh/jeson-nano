@@ -146,8 +146,8 @@ def test_loop_wiring_relook_guidance_budget(test_map) -> None:
     perception.request_relook = asked.append  # type: ignore[method-assign]
 
     class AskingSwarm(Swarm):
-        def tick(self, t, readings, detections):
-            cmds, rows, state = super().tick(t, readings, detections)
+        def tick(self, t, readings, detections, **kw):
+            cmds, rows, state = super().tick(t, readings, detections, **kw)
             return cmds, rows, state.model_copy(update={"relook_requests": ["det0001"]})
 
     observed: list[SwarmState] = []
