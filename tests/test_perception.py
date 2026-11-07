@@ -131,6 +131,20 @@ def test_mock_state_roundtrip(studio):
     assert done[0].id == det.id and done[0].status == "low_conf"
 
 
+@needs_gl
+def test_snapshot_from_live_mode_loads_in_mock(studio):
+    """act2_start.pkl is recorded with live Gemma on the demo laptop but loaded by teammates in mock mode."""
+    live = _live(studio, lambda f: _g(fire=True, conf=0.9))
+    _frame(live, studio, "D1", 0.0)
+    _settle(live)
+    state = live.get_state()
+    live.close()
+    mock = _mock(studio)
+    with pytest.warns(UserWarning, match="mode 'local'"):
+        mock.set_state(state)
+    assert [d.label for d in _look(mock, studio, "D1", 1.0)] == ["fire"]  # works normally afterwards
+
+
 def test_mock_needs_ground_truth():
     with pytest.raises(ValueError):
         Perception(mode="mock")

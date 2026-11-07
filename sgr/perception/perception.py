@@ -94,6 +94,12 @@ class Perception:
         return {"mode": self.mode, "impl": self._impl.get_state()}
 
     def set_state(self, s: dict) -> None:
+        """Restore detections. A snapshot from another mode (e.g. act2_start.pkl recorded with live Gemma
+        on the demo laptop, loaded by a teammate running mock) can't be mapped across: start clean."""
+        if s.get("mode") != self.mode:
+            warnings.warn(f"snapshot perception state is from mode {s.get('mode')!r}, running {self.mode!r}: "
+                          "starting with no detections", stacklevel=2)
+            return
         self._impl.set_state(s["impl"])
 
     def close(self) -> None:
