@@ -29,7 +29,11 @@ Triggers: "t" = sim time; "after" = an event kind (chain_formed, replan, drone_l
 Actions: click (x/y, on_route = fraction 0..1 along the current route, or ahead_of_ff = metres ahead of
 the firefighter along the route), undo, act2, reset, speed,
 save (name), ff_input (fwd/strafe/yaw), ff_autopilot (the firefighter follows the guidance arrow), stop.
-Exit code 1 if an expected beat never happened, or a step never ran.
+Every click must get a reaction: the World must accept it (not within 1 m of a drone / the firefighter /
+the survivor, on a free cell) and the swarm must notice it (MARK_BLOCKED near it, or a route REPLAN /
+NO_ROUTE) within CLICK_REACT_S. A click no drone can see (> 6 m LiDAR range from all of them) is reported,
+because live it would be a silent beat.
+Exit code 1 if an expected beat never happened, a step never ran, or a click got no reaction.
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 import time
 from pathlib import Path
@@ -71,8 +76,10 @@ DEFAULT_SCRIPT: dict[str, Any] = {
     "expect": ["SURVIVOR_CONFIRMED", "CHAIN_POSITION", "chain_formed", "REPLAN", "chain_ready", "MISSION_COMPLETE",
                "summary"],
     "steps": [
-        # the judge's change tool: debris on the route once the chain holds, then Undo
-        {"after": "chain_formed", "wait": 8, "do": "click", "mode": "debris", "on_route": 0.55},
+        # the judge's change tool: debris on the route once the chain holds, then Undo. Pinned to W's tested
+        # spot just south of the n4 junction (wide, D1 in LiDAR range): REPLAN with a ~+1 m detour.
+        # The presenter should click the same spot. (on_route 0.55 fell in the n8-n9 corridor out of range.)
+        {"after": "chain_formed", "wait": 8, "do": "click", "mode": "debris", "x": 5.8, "y": 24.8},
         {"after": "prev", "wait": 12, "do": "undo"},
         # Act 2 from the snapshot (saved once the chain is at its posts), the firefighter walks the arrow
         {"after": "chain_ready", "wait": 3, "do": "act2"},
@@ -85,6 +92,8 @@ DEFAULT_SCRIPT: dict[str, Any] = {
 }
 
 AUTOPILOT_LOOKAHEAD_M = 1.2
+CLICK_REACT_S = 30.0  # a judge click must be noticed within this (sim s): the patrol sweeps ~30 m stretches
+CLICK_NEAR_M = 2.5  # a MARK_BLOCKED this close to the click counts as noticing it
 KEY_ACTIONS = {"CONFIRM_HAZARD", "REJECT_DETECTION", "RETREAT", "DRONE_LOST", "SURVIVOR_CONFIRMED", "REPLAN",
                "NO_ROUTE", "CHAIN_POSITION", "FF_CORRECTION", "MISSION_COMPLETE", "MARK_BLOCKED", "INSPECT"}
 
@@ -102,6 +111,8 @@ class Replay:
         self.log: list[str] = []
         self._last_t = loop.t
         self._ff_last: tuple[float, float] | None = None
+        self._click: dict[str, Any] | None = None  # the last click, waiting for a reaction
+        self.click_failures: list[str] = []
         self._stuck = 0
         self._orig_publish = loop._publish
         loop._publish = self._tap  # see every message the loop publishes, with or without a server
@@ -113,6 +124,7 @@ class Replay:
             self.happened.setdefault(msg.kind, t)
         elif isinstance(msg, TraceMsg):
             self.happened.setdefault(msg.action, t)
+            self._check_reaction(msg, t)
             if self.verbose and msg.action in KEY_ACTIONS and msg.t >= t - 1.0:  # not the history re-sent on a load
                 self._say(f"{msg.t:7.1f}  {msg.drone:5} {msg.action:18} {msg.reason}")
         elif isinstance(msg, GuidanceMsg):
@@ -137,6 +149,7 @@ class Replay:
         ss = self.loop.swarm_state
         if ss is not None and ss.phase:  # phases are triggers too: explore, chain, chain_ready, no_route
             self.happened.setdefault(ss.phase, self.loop.t)
+        self._watch_click()
         while self.next < len(self.steps) and self._due(self.steps[self.next]):
             self._run(self.steps[self.next])
             self.next += 1
@@ -168,6 +181,39 @@ class Replay:
         strafe = 0.6 * (1 if (self._stuck // 20) % 2 == 0 else -1) if self._stuck > 10 else 0.0
         self.loop.bus.send_command(FFInputMsg(fwd=fwd, strafe=strafe, yaw=heading))
 
+    def _watch_click(self) -> None:
+        c = self._click
+        if c is None:
+            return
+        if not c["checked"] and self.loop.t > c["t"] + 0.05:  # the loop has applied it by now
+            c["checked"] = True
+            if len(self.loop.click_stack) <= c["n"]:
+                self._fail_click(f"click at ({c['x']:.1f}, {c['y']:.1f}) refused by the World "
+                                 "(within 1 m of a drone / the firefighter / the survivor, or not a free cell)")
+                return
+        if self.loop.t - c["t"] > CLICK_REACT_S:
+            near = min((math.hypot(p.x - c["x"], p.y - c["y"]) for d in self.loop.scenario.drones.ids
+                        if d not in self.loop.dead for p in [self.loop.world.drone_pose(d)]), default=math.inf)
+            self._fail_click(f"click at ({c['x']:.1f}, {c['y']:.1f}) not noticed in {CLICK_REACT_S:.0f} s "
+                             f"(nearest drone {near:.1f} m away; LiDAR range 6 m): a silent beat live")
+
+    def _fail_click(self, why: str) -> None:
+        self._say(f"{self.loop.t:7.1f}  REPLAY WARNING {why}")
+        self.click_failures.append(why)
+        self._click = None
+
+    def _check_reaction(self, msg: TraceMsg, t: float) -> None:
+        c = self._click
+        if c is None or t < c["t"]:
+            return
+        hit = msg.drone == "swarm" and msg.action in ("REPLAN", "NO_ROUTE")
+        if msg.action == "MARK_BLOCKED":
+            m = re.search(r"near \(([-\d.]+), ([-\d.]+)\)", msg.reason)
+            hit = bool(m) and math.hypot(float(m[1]) - c["x"], float(m[2]) - c["y"]) <= CLICK_NEAR_M
+        if hit:
+            self._say(f"{t:7.1f}  REPLAY click noticed after {t - c['t']:.1f} s ({msg.action} by {msg.drone})")
+            self._click = None
+
     def _due(self, step: dict[str, Any]) -> bool:
         if "t" in step:
             return self.loop.t >= float(step["t"])
@@ -198,6 +244,7 @@ class Replay:
                 x, y = _along(pts, float(step["on_route"]))
             bus.send_command(ClickMsg(mode=step.get("mode", "debris"), x=float(x), y=float(y)))
             note = f"{step.get('mode', 'debris')} at ({x:.1f}, {y:.1f})"
+            self._click = {"t": t, "x": float(x), "y": float(y), "n": len(self.loop.click_stack), "checked": False}
         elif do == "undo":
             bus.send_command(UndoMsg())
         elif do == "act2":
@@ -311,7 +358,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {'ok  ' if e in rp.happened else 'MISS'} {e:20} {rp.happened.get(e, '')}")
     if skipped:
         print(f"  steps that never ran: {skipped}")
-    return 1 if missing or skipped else 0
+    if rp._click is not None:  # the run ended while still waiting
+        rp._fail_click(f"click at ({rp._click['x']:.1f}, {rp._click['y']:.1f}) never noticed before the end")
+    for why in rp.click_failures:
+        print(f"  CLICK {why}")
+    return 1 if missing or skipped or rp.click_failures else 0
 
 
 if __name__ == "__main__":
