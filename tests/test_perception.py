@@ -33,6 +33,9 @@ def _g(fire=False, person=False, conf=0.9) -> GemmaResult:
     ("fire", 0.90, _g(fire=False), 2, 0.27, "rejected"),  # still disagrees after 2 re-looks
     ("fire", 0.50, _g(fire=True, conf=0.6), 2, 0.56, "unconfirmed"),  # agrees, but weakly
     ("fire", 0.62, None, 0, 0.62, "unconfirmed"),  # Gemma timeout / down
+    ("fire", 0.62, _g(fire=True, conf=0.85), 0, 0.758, "low_conf"),  # weak colour: closer look first
+    ("fire", 0.62, _g(fire=True, conf=0.85), 1, 0.758, "confirmed"),  # ...and agreed again up close
+    ("fire", 0.62, _g(fire=False, conf=0.9), 1, 0.186, "rejected"),  # decoy seen head-on
 ])
 def test_fusion(label, fast, g, relooks, combined, status):
     assert fuse(label, fast, g, relooks) == (pytest.approx(combined, abs=1e-3), status)

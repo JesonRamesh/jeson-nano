@@ -39,7 +39,7 @@ FF_KV_YAW = 25.0
 
 # drone colours avoid orange and yellow-green so drones never trip the fire/person detector
 DRONE_RGBAS = ((0.20, 0.45, 1.0, 1), (0.10, 0.80, 0.90, 1), (0.80, 0.25, 0.85, 1), (0.92, 0.92, 0.96, 1))
-FF_RGBA = (0.55, 0.12, 0.10, 1)
+FF_RGBA = (0.18, 0.22, 0.30, 1)  # charcoal blue: not a fire hue, not hi-vis (a 'person' hit would look like a survivor)
 
 
 @dataclass

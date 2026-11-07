@@ -24,7 +24,7 @@ import numpy as np
 # OpenCV HSV: H in 0..179, S and V in 0..255
 FIRE_H = (0, 33)
 FIRE_S_MIN = 150
-FIRE_V_MIN = 200
+FIRE_V_MIN = 100  # the matte decoy panel is V 100-190 at grazing angles; S > 150 still rejects walls/floor/debris/skin
 PERSON_H = (34, 50)
 PERSON_S_MIN = 150
 PERSON_V_MIN = 90
