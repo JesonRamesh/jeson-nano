@@ -122,6 +122,24 @@ def test_debris_seen_then_removed(world):
     assert world.lidar("D1")[0] == pytest.approx(LIDAR_RANGE)
 
 
+def test_compromised_debris_independent_of_other_edges(map_dir):
+    """Editing one compromised edge must not move another edge's blocks (reachability was jitter-dependent)."""
+    sc = Scenario.load(map_dir)
+
+    def e9_blocks(s):
+        w = World(map_dir, s)
+        out = []
+        for h in w.placed_handles("debris"):
+            if math.hypot(h.x - 24.0, h.y - 8.0) < 1.5:
+                q = w.data.mocap_quat[w._pool_mocap["debris"][w._placed[h.id].slot]]
+                out.append((round(h.x, 6), round(h.y, 6), tuple(np.round(q, 9))))
+        return sorted(out)
+
+    more = sc.model_copy(update={"compromised": [{"edge": "e1", "at": 0.5}, *sc.compromised]})
+    more = Scenario.model_validate(more.model_dump())
+    assert len(e9_blocks(sc)) == 2 and e9_blocks(sc) == e9_blocks(more)
+
+
 def test_compromised_edge_has_debris(world):
     gt = world.ground_truth()
     assert len(world.placed_handles("debris")) == 2  # ceil(1.8 / 1.0) blocks across e9 at (24, 8)

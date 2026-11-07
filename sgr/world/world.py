@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import pickle
+import zlib
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,7 @@ FF_YAW_GAIN = 4.0
 FF_PUSH = 1.0
 DEAD_FALL_VZ = -2.0
 DEAD_RGBA = (0.08, 0.08, 0.08, 1.0)
+DEBRIS_TILT_DEG = 10.0  # §7.1 "slightly rotated"
 FLICKER = 0.25  # +-fraction of fire colour per tick
 
 
@@ -131,8 +133,8 @@ class World:
         sc, q = self.scenario, self.data.qpos
         alt = float(sc.drones.altitude)
         for d, start in zip(self.drones, sc.drones.start):
-            qa = self._d[d]["q"]
-            q[qa[0]], q[qa[1]], q[qa[2]], q[qa[3]] = float(start[0]), float(start[1]), alt, 0.0
+            qa = self._d[d]["q"]  # drones start facing the entrance heading, like the firefighter
+            q[qa[0]], q[qa[1]], q[qa[2]], q[qa[3]] = float(start[0]), float(start[1]), alt, float(sc.entrance.yaw)
         e = sc.entrance
         fq = self._ff["q"]
         q[fq[0]], q[fq[1]], q[fq[2]] = e.x, e.y, e.yaw
@@ -158,7 +160,9 @@ class World:
             count = max(1, math.ceil(e.width / size))
             for k in range(count):
                 off = (k - (count - 1) / 2) * size
-                self._place("debris", px + off * nx, py + off * ny, True, ang, scenario=True)
+                # tilt from the edge id + block index, so editing one edge never moves another's blocks
+                tilt = (zlib.crc32(f"{c.edge}:{k}".encode()) % 2001 - 1000) / 1000 * math.radians(DEBRIS_TILT_DEG)
+                self._place("debris", px + off * nx, py + off * ny, True, ang + tilt, scenario=True, jitter=False)
 
     # ------------------------------------------------------------ sim
     def step(self, n: int) -> None:
@@ -312,7 +316,7 @@ class World:
         return any(math.hypot(x - px, y - py) < SAFE_DIST for px, py in pts)
 
     def _place(self, kind: str, x: float, y: float, force: bool, yaw: float | None,
-               scenario: bool = False, size: float = 1.5) -> Handle | None:
+               scenario: bool = False, size: float = 1.5, jitter: bool = True) -> Handle | None:
         if not force and (not self._is_free(x, y) or self._too_close(x, y)):
             return None
         used = {p.slot for p in self._placed.values() if p.handle.kind == kind}
@@ -321,8 +325,8 @@ class World:
             return None
         if yaw is None:
             yaw = self._rng.uniform(-math.pi, math.pi)
-        if kind == "debris":
-            yaw += math.radians(self._rng.uniform(-10, 10))  # "slightly rotated"
+        if kind == "debris" and jitter:
+            yaw += math.radians(self._rng.uniform(-DEBRIS_TILT_DEG, DEBRIS_TILT_DEG))  # "slightly rotated"
         mid = self._pool_mocap[kind][slot]
         self.data.mocap_pos[mid] = (x, y, 0.0)
         self.data.mocap_quat[mid] = _yaw_quat(yaw)
