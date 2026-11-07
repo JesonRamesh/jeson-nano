@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Runtime output
+snapshots/
+render_smoke.png
+
+# Raw phone scans (pass by USB/Drive, never commit)
+maps/*/raw/
+
+# Web
+web/node_modules/
+web/dist/
