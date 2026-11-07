@@ -41,6 +41,8 @@ SAME_ROUTE_DEV_M = 1.5  # ... and never further than this from the old line is t
 OLD_ROUTE_S = 6.0
 REPLAN_SETTLE_S = 1.0  # after a re-plan, more of the same blockage is folded into one follow-up (first one: instant)
 NO_ROUTE_RECHECK_S = 2.0
+REPOST_S = 5.0  # a watcher pushed off its post (too hot) gets a new one after this
+WATCH_MAX_HEAT = 0.8  # heat_norm limit at a watch post (~60 °C: under the 70 °C retreat limit)
 WATCH_M = 3.3  # fire-watch distance: ~55 °C on the heat model, under the 70 °C retreat limit
 TURN_DEG = 35.0
 CHAIN_READY_M = 0.8  # a chain drone this close to its post is in position
@@ -66,6 +68,8 @@ class Rescue:
     watcher: str | None = None
     watch_fire: Pt | None = None
     _watch_done: bool = False  # one watch per run: the flare-up victim is not replaced
+    _watch_post_xy: Pt | None = None
+    _watch_t: float = 0.0
     _pending: tuple[str, str, list[tuple[int, int]], Pt] | None = None  # (sensor, drone, cells, xy)
     _next_check: float = 0.0
     _chain_key: tuple | None = None
@@ -247,6 +251,10 @@ class Rescue:
         self.path = new
         self.bb.route = Route(points=pts, status="ok", version=old.version + 1)
 
+    def _flyable(self, cm, xy: Pt) -> bool:
+        i, j = self.belief.world_to_cell(*xy)
+        return self.belief.inside(i, j) and bool(cm.traversable[j, i])
+
     def _ahead(self, path: list[Pt]) -> list[Pt]:
         """The part of `path` still ahead of the firefighter (all of it in Act 1)."""
         if self.ff is None or len(path) < 2:
@@ -286,7 +294,8 @@ class Rescue:
             return
         self._chain_key = key
         simp = rdp(self._ahead(self.path), 0.3)  # Act 2: only turns still ahead of the firefighter
-        turns = sorted(turn_points(simp, TURN_DEG), key=lambda tp: -tp[1])
+        cm = cost_map(self.belief)  # drone mode: a sentinel post must be somewhere a drone can hover
+        turns = sorted((tp for tp in turn_points(simp, TURN_DEG) if self._flyable(cm, tp[0])), key=lambda tp: -tp[1])
 
         def near(p: Pt):
             return lambda d: math.hypot(alive[d].x - p[0], alive[d].y - p[1])
@@ -353,6 +362,14 @@ class Rescue:
         if self.watcher is not None and self.watcher not in alive:
             self.watcher, self._watch_done = None, True  # the watcher was lost (flare-up): don't replace it
             return
+        if self.watcher is not None and not self._watch_done:
+            ag = agents[self.watcher]
+            if ag._station != self._watch_post_xy and t - self._watch_t > REPOST_S:  # pushed off (too hot)
+                post = self._watch_post(self.watch_fire, alive[self.watcher])
+                if post is not None:
+                    self._watch_post_xy, self._watch_t = post, t
+                    ag.station(post, face=self.watch_fire, mode="WATCHING", task="watching the fire")
+            return
         if self.watcher is not None or self._watch_done:
             return
         fires = [h for h in self.bb.hazards.values() if h.kind == "fire"]
@@ -368,6 +385,7 @@ class Rescue:
             self._watch_done = True
             return
         self.watcher, self.watch_fire = d, fire
+        self._watch_post_xy, self._watch_t = post, t
         agents[d].release()
         agents[d].set_area(None)
         self.bb.claims = {a: o for a, o in self.bb.claims.items() if o != d}
@@ -388,8 +406,8 @@ class Rescue:
                 i, j = self.belief.world_to_cell(px, py)
                 if not (self.belief.inside(i, j) and cm.traversable[j, i] and np.isfinite(df.cost[j, i])):
                     continue
-                if not self._los((px, py), fire):
-                    continue
+                if self.belief.heat[j, i] >= WATCH_MAX_HEAT or not self._los((px, py), fire):
+                    continue  # spread fires: 3.3 m from this one can be right next to another
                 s = self._corridor_dist((px, py)) - 0.01 * df.cost[j, i] * self.belief.res
                 if s > score:
                     best, score = (px, py), s

@@ -76,13 +76,12 @@ DEFAULT_SCRIPT: dict[str, Any] = {
     "expect": ["SURVIVOR_CONFIRMED", "CHAIN_POSITION", "chain_formed", "REPLAN", "chain_ready", "MISSION_COMPLETE",
                "summary"],
     "steps": [
-        # the judge's change tool: debris on the route once the chain holds, then Undo. Pinned to W's tested
-        # spot just south of the n4 junction (wide, D1 in LiDAR range): REPLAN with a ~+1 m detour.
-        # The presenter should click the same spot. (on_route 0.55 fell in the n8-n9 corridor out of range.)
-        {"after": "chain_formed", "wait": 8, "do": "click", "mode": "debris", "x": 5.8, "y": 24.8},
+        # the judge's change tool: debris on the route once the chain is in place (the drones then patrol the
+        # route, so the click gets seen), then Undo. W's spot just south of the n4 junction: a REPLAN detour.
+        {"after": "chain_ready", "wait": 3, "do": "click", "mode": "debris", "x": 5.8, "y": 24.8},
         {"after": "prev", "wait": 12, "do": "undo"},
         # Act 2 from the snapshot (saved once the chain is at its posts), the firefighter walks the arrow
-        {"after": "chain_ready", "wait": 3, "do": "act2"},
+        {"after": "prev", "wait": 4, "do": "act2"},
         {"after": "prev", "wait": 0.5, "do": "ff_autopilot"},
         # §9 "Route becomes unsafe": debris lands ahead of the walking firefighter, then the judge undoes it
         {"after": "prev", "wait": 15, "do": "click", "mode": "debris", "ahead_of_ff": 5},
@@ -92,7 +91,8 @@ DEFAULT_SCRIPT: dict[str, Any] = {
 }
 
 AUTOPILOT_LOOKAHEAD_M = 1.2
-AUTOPILOT_BEHIND_M = 1.0  # stay at least this far behind the lead along the route
+AUTOPILOT_BEHIND_M = 1.0  # stay at least this far behind the lead along the route ...
+AUTOPILOT_LEAD_STUCK_S = 5.0  # ... unless the lead hasn't moved for this long (holding at a hot zone): walk on
 CLICK_REACT_S = 30.0  # a judge click must be noticed within this (sim s): the patrol sweeps ~30 m stretches
 CLICK_NEAR_M = 2.5  # a MARK_BLOCKED this close to the click counts as noticing it
 KEY_ACTIONS = {"CONFIRM_HAZARD", "REJECT_DETECTION", "RETREAT", "DRONE_LOST", "SURVIVOR_CONFIRMED", "REPLAN",
@@ -112,6 +112,7 @@ class Replay:
         self.log: list[str] = []
         self._last_t = loop.t
         self._ff_last: tuple[float, float] | None = None
+        self._lead_last: tuple[float, tuple[float, float]] | None = None
         self._click: dict[str, Any] | None = None  # the last click, waiting for a reaction
         self.click_failures: list[str] = []
         self._stuck = 0
@@ -179,7 +180,11 @@ class Replay:
         lead = getattr(self.loop.guidance, "lead", None)
         if lead and len(pts) >= 2 and lead not in self.loop.dead and not done:
             q = self.loop.world.drone_pose(lead)
-            if _arc(pts, (q.x, q.y)) < _arc(pts, (ff.x, ff.y)) + AUTOPILOT_BEHIND_M:
+            moved = math.dist((q.x, q.y), self._lead_last[1]) if self._lead_last else 1.0
+            if self._lead_last is None or moved > 0.5:
+                self._lead_last = (self.loop.t, (q.x, q.y))
+            lead_stuck = self.loop.t - self._lead_last[0] > AUTOPILOT_LEAD_STUCK_S  # e.g. holding at a hot zone
+            if not lead_stuck and _arc(pts, (q.x, q.y)) < _arc(pts, (ff.x, ff.y)) + AUTOPILOT_BEHIND_M:
                 fwd = min(fwd, 0.15)  # let it get ahead again
         # stuck (snagged on a corner): sidestep for a moment
         moved = math.dist((ff.x, ff.y), self._ff_last) if self._ff_last else 1.0
