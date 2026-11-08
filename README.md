@@ -7,6 +7,7 @@
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
 ![MuJoCo 3.17](https://img.shields.io/badge/sim-MuJoCo%203.17-0B57D0)
 ![Gemma 4 E4B, local](https://img.shields.io/badge/vision-Gemma%204%20E4B%20(local%2C%20Ollama)-4CC88B)
+![Gemini drone voices](https://img.shields.io/badge/drone%20voices-Gemini%20%2B%20Gemini%20TTS-8E75B2?logo=googlegemini&logoColor=white)
 ![No cloud in the control loop](https://img.shields.io/badge/control%20loop-offline-EE5257)
 ![React + three.js](https://img.shields.io/badge/dashboard-React%20%2B%20three.js-61DAFB?logo=react&logoColor=black)
 
@@ -22,7 +23,7 @@
 ## In one minute
 
 - **The problem.** Being lost, caught or trapped is the second leading cause of firefighter deaths on the fireground (18.2%, USFA). Smoke takes away every visual reference, and nobody has a live picture of the building.
-- **What we built.** A swarm goes in first. Four simulated drones explore a **digital twin made from an iPhone LiDAR scan** of the Marshgate building, find fire and a survivor **using only their own sensors**, then hold a chain of checkpoints along the safest route. A person walks that route in first person while the drones talk them through it.
+- **What we built.** A swarm goes in first. Four simulated drones explore a **digital twin made from an iPhone LiDAR scan** of the Marshgate building, find fire and a survivor **using only their own sensors**, then hold a chain of checkpoints along the safest route. A person walks that route in first person while the drones talk them through it, each in its own **Gemini** voice and personality.
 - **Why you can trust what you see.** Every action is logged with the sensor reading behind it, and the code refuses to log an action without one. The swarm never sees ground truth, and a test fails the build if it tries. When the scene changes (someone clicks to drop debris, a drone is lost to heat), the drones find out through their LiDAR and cameras and re-plan on screen.
 - **Where it runs.** One laptop. MuJoCo on the CPU, Gemma 4 E4B through a local Ollama server on an 8 GB laptop GPU, and nothing in the control loop that needs the internet.
 
@@ -31,15 +32,9 @@
 - **Every decision cites what it perceived.** Each row in the decision log names its sensor and value, and uncertain detections trigger a closer look before anything is marked. [More](#1-every-decision-traces-to-a-sensor-reading)
 - **The world changes, the swarm re-plans.** Debris dropped on the route is flagged by LiDAR **0.2 s** later; the old route turns red and a new one appears. A drone is lost mid-mission and its area is reassigned. [More](#2-the-world-changes-the-swarm-re-plans)
 - **The deadliest failure, handled live.** A safe route goes unsafe while the firefighter is on it: "Stop. Route blocked." and a new route **0.5 s** later. [More](#3-why-it-matters)
-- **One laptop, careful when unsure.** Local Gemma, a measured edge budget, hard timeouts, and explicit rules for uncertainty. [More](#4-one-laptop-careful-when-unsure)
-- **Phone scan → physics twin → coordinating swarm → a human guided through smoke**, backed by about 300 automated tests and an honesty test. [More](#5-from-a-phone-scan-to-a-guided-rescue)
-
----|:-:|---|---|
-| **Perception-driven action** | 25% | Every row in the decision log cites its sensor and value. Uncertain detections trigger a closer look before anything is marked. | [§1](#1-perception-driven-action-25) |
-| **Adaptation to change** | 25% | Debris dropped on the route: LiDAR flags it **0.2 s** later, the old route turns red and a new one appears. A drone is lost mid-mission and its area is reassigned. | [§2](#2-adaptation-to-change-25) |
-| **Relevance and impact** | 20% | The deadliest failure, a safe route going unsafe while the firefighter is on it, caught live: "Stop. Route blocked." and a new route **0.5 s** later. | [§3](#3-relevance-and-impact-20) |
-| **Operational autonomy** | 15% | One laptop, local Gemma, a measured edge budget, hard timeouts, and explicit rules for when the swarm is unsure. | [§4](#4-operational-autonomy-15) |
-| **Ambition and technical quality** | 15% | Phone scan → physics twin → coordinating swarm → a human guided through smoke, backed by about 300 automated tests and an honesty test. | [§5](#5-ambition-and-technical-quality-15) |
+- **Gemini gives the swarm a voice.** Each drone talks to the firefighter in its own Gemini TTS voice and personality, reworded live by Gemini and fact-checked against the swarm's beliefs, so the firefighter can tell the drones apart by ear in the smoke. [More](#4-gemini-gives-the-swarm-a-voice)
+- **One laptop, careful when unsure.** Local Gemma, a measured edge budget, hard timeouts, and explicit rules for uncertainty. [More](#5-one-laptop-careful-when-unsure)
+- **Phone scan → physics twin → coordinating swarm → a human guided through smoke**, backed by about 300 automated tests and an honesty test. [More](#6-from-a-phone-scan-to-a-guided-rescue)
 
 ---
 
@@ -194,7 +189,27 @@ Three safeguards keep the firefighter out of danger:
 
 ---
 
-## 4. One laptop, careful when unsure
+## 4. Gemini gives the swarm a voice
+
+In Act 2 the firefighter can't read a map. They're in smoke, following lights and voices. **Gemini is what makes the drones sound like a rescue team rather than a sat-nav.**
+
+| Use | Model | What it does | How it helped us |
+|---|---|---|---|
+| **A personality for each drone** | `gemini-3.5-flash-lite` | Rewords the drone's line in its own character, in about 0.5 s: D1 a calm team leader, D2 warm and encouraging, D3 upbeat and quick, D4 precise and softly spoken. Used for the intro, progress updates and "wait for me" / "coming back to you" lines | Guidance feels like a team talking you in, not a looped recording. The same facts come out in fresh words, so repeated instructions don't become background noise |
+| **A distinct voice for each drone** | `gemini-3.8-flash-lite-tts` | Voices every drone line with its own prebuilt voice (D1 Charon, D2 Kore, D3 Puck, D4 Aoede) in about 2 s. The heads-up guidance lines get a calm "incident commander" voice (Orus), generated once at startup so they play instantly | With no visibility, the firefighter can tell **which drone** is speaking, and hear a handover from one checkpoint drone to the next, by voice alone |
+| **Gemma: Gemini's open sibling, on-device** | `gemma4:e4b` via Ollama | Checks every fire or survivor candidate from the drone cameras and returns a verdict, a confidence and a short caption ("Flames on the floor ahead.") | Gave us Gemini-family vision with **no network**, inside the control loop, on an 8 GB laptop GPU. The captions go straight into the decision log as evidence |
+| **Gemini design language** | — | The dashboard uses Gemini's four-point spark and colours to show AI at work: the spark on the loading screen, a Gemini-coloured glow on the 3D view and drone tiles while a Gemma check is running, the "confirmed" chip, and the ring on the Start button | Viewers can see at a glance when the AI is thinking and what it decided |
+
+**Built so a cloud model can never put the firefighter at risk:**
+
+- **Facts first, words second.** Guidance decides *when* a drone speaks and *what the facts are*, from the swarm's beliefs only. Gemini only rewords. A fact check rejects any reworded line that adds a direction, number, drone or hazard that isn't in the facts, and the fixed line is used instead.
+- **Never waits on the network.** Gemini runs on its own worker thread with hard deadlines: 2 s for wording, 4 s for speech, and lines queued for more than 3 s are spoken plainly. The sim loop and the swarm's decisions never depend on it.
+- **Urgent lines skip the rewording.** Fire, survivor and handover lines go straight to the voice, and danger warnings ("Stop. Fire ahead. Turn back.") are never reworded at all.
+- **Online / Offline switch.** In the firefighter view, <kbd>V</kbd> toggles between **Online · Gemini** voices and **Offline · text only**, where the HUD subtitle and the drones' speech bubbles carry every instruction with no network. Without an API key, the drones fall back to the browser's local voices, so the demo is never silent by accident.
+
+---
+
+## 5. One laptop, careful when unsure
 
 
 **Edge budget.** Everything in the decision loop runs on **one laptop**:
@@ -222,11 +237,11 @@ Three safeguards keep the firefighter out of danger:
 | No safe route exists | `NO_ROUTE`: hold, re-check every 2 s, and send a drone to look at the blockage again |
 | Drone running hot during Act 2 | At 60 °C or more, guidance stops steering it until it cools below 45 °C |
 
-**Honest note on Act 2 voices.** The drones' spoken lines can optionally be reworded and voiced by Gemini (`--voice gemini`, needs an API key). It runs on its own thread outside the control loop: guidance never waits for it, danger lines never go through it, and every line has a fixed fallback. For a run with **no network at all**, use `--voice template`, which uses fixed lines spoken by the browser's local voices.
+**The one network feature: Gemini voices.** The Act 2 drone voices ([§4](#4-gemini-gives-the-swarm-a-voice)) are the only part that uses the internet, and they sit outside the control loop. For a run with **no network at all**, switch the firefighter view to *Offline · text only* (<kbd>V</kbd>) or start with `--voice template` (fixed lines, local browser voices).
 
 ---
 
-## 5. From a phone scan to a guided rescue
+## 6. From a phone scan to a guided rescue
 
 
 **Real-to-sim in an afternoon.**
@@ -288,19 +303,21 @@ flowchart LR
         SW -- "TraceRows with Evidence" --> B[(Bus)]
         G --> B
     end
+    G -. "callouts: facts + fixed line" .-> GM["Gemini (optional, cloud)<br/>flash-lite rewording +<br/>TTS voice per drone"]
+    GM -. "fact-checked line + audio" .-> B
     B <-- "WebSocket /ws<br/>JSON + binary JPEG frames" --> D["Dashboard<br/>React + three.js"]
     D -- "clicks: debris / fire,<br/>firefighter WASD" --> B
 ```
 
 | Package | Role | Owner |
 |---|---|---|
-| `sgr/world/` | MuJoCo world: grid → walls, drones, firefighter body, LiDAR, cameras, fire and debris pools, heat | P |
-| `sgr/perception/` | `mock` / `remote` / `local` perception, fast detector, Gemma client, fusion, budget probe | P |
-| `sgr/swarm/` | Blackboard, belief grid, area assignment, A*, hazards, drone loss, rescue chain, decision trace | S |
-| `sgr/guidance/` | Act 2: firefighter guidance rules, handover, corrections, summary, drone voices | P |
-| `sgr/loop.py`, `sgr/app.py`, `sgr/bus.py`, `sgr/contracts.py` | 10 Hz sim loop, entry point, thread-safe queues, shared contracts | S |
-| `sgr/server/`, `web/` | FastAPI + WebSocket server, React + three.js dashboard and firefighter view | D |
-| `tools/`, `maps/`, `web/src/editor/` | Scan pipeline, route graph, scenario editor, disaster dressing | W |
+| `sgr/world/` | MuJoCo world: grid → walls, drones, firefighter body, LiDAR, cameras, fire and debris pools, heat | Ashraya |
+| `sgr/perception/` | `mock` / `remote` / `local` perception, fast detector, Gemma client, fusion, budget probe | Ashraya |
+| `sgr/swarm/` | Blackboard, belief grid, area assignment, A*, hazards, drone loss, rescue chain, decision trace | Yash |
+| `sgr/guidance/` | Act 2: firefighter guidance rules, handover, corrections, summary, drone voices | Ashraya |
+| `sgr/loop.py`, `sgr/app.py`, `sgr/bus.py`, `sgr/contracts.py` | 10 Hz sim loop, entry point, thread-safe queues, shared contracts | Yash |
+| `sgr/server/`, `web/` | FastAPI + WebSocket server, React + three.js dashboard and firefighter view | Helitha |
+| `tools/`, `maps/`, `web/src/editor/` | Scan pipeline, route graph, scenario editor, disaster dressing | Jeson |
 
 ---
 
@@ -327,6 +344,12 @@ ollama pull gemma4:e4b
 uv run sgr --map maps/marshgate-route --perception local --voice template
 ```
 
+**With Gemini drone voices:** put your key in `.env` as `GOOGLE_API_KEY=...` (or `GEMINI_API_KEY`) and run with `--voice auto` (the default) or `--voice gemini`. The console prints which Gemini models are voicing the drones.
+
+```bash
+uv run sgr --map maps/marshgate-route --perception local --voice gemini
+```
+
 **In the dashboard:**
 
 | Key / action | What it does |
@@ -337,6 +360,7 @@ uv run sgr --map maps/marshgate-route --perception local --voice template
 | ■ on a drone feed | Fail that drone (it loses its signal) |
 | <kbd>G</kbd> | Send in the firefighter (Act 2), once the chain is in position |
 | <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, arrows, mouse | Walk and look in the firefighter view |
+| <kbd>V</kbd> | Firefighter view: toggle Online · Gemini voices / Offline · text only |
 | <kbd>F</kbd> | Full screen |
 
 **Useful flags:** `--speed 2.5` (faster for video), `--no-render` (no camera rendering), `--no-server --max-ticks 600` (headless), `--voice auto|gemini|template|off`.
@@ -382,14 +406,14 @@ docs/media/     README images and clips (captured from a real run)
 
 Built in a weekend by a team of four for the AgentVerse 2026 Robotics Track, each owning one slice of the system through shared contracts:
 
-| Role | Owns |
+| Who | Owns |
 |---|---|
-| **W: World & Scan** | iPhone scan → twin pipeline, route graph, scenario editor, disaster dressing |
-| **S: Swarm & Integration** | Swarm brain, sim loop, contracts, replay, merge gate |
-| **P: Perception & Sim core** | MuJoCo world, fast detector, Gemma, fusion, Act 2 guidance and voices |
-| **D: Dashboard & 3D** | Server, mission-control dashboard, 3D twin view, firefighter view |
+| **Jeson**: World & Scan | iPhone scan → twin pipeline, route graph, scenario editor, disaster dressing |
+| **Yash**: Swarm & Integration | Swarm brain, sim loop, contracts, replay, merge gate |
+| **Ashraya**: Perception & Sim core | MuJoCo world, fast detector, Gemma, fusion, Act 2 guidance and Gemini voices |
+| **Helitha**: Dashboard & 3D | Server, mission-control dashboard, 3D twin view, firefighter view |
 
-Contributors: [@ashrayap-web](https://github.com/ashrayap-web) · [@JesonRamesh](https://github.com/JesonRamesh) · [@yash-joshi5379](https://github.com/yash-joshi5379) · [@ItzSmudge](https://github.com/ItzSmudge)
+On GitHub: Jeson [@JesonRamesh](https://github.com/JesonRamesh) · Ashraya [@ashrayap-web](https://github.com/ashrayap-web) · Yash [@yash-joshi5379](https://github.com/yash-joshi5379) · Helitha [@ItzSmudge](https://github.com/ItzSmudge)
 
 ## Sources
 
