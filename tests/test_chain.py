@@ -170,3 +170,36 @@ def test_patrol_starts_when_chain_ready_and_stops_in_act2(swarm: Swarm) -> None:
     _, _, st = swarm.tick(41.1, _r(41.1), [], ff=Pose(x=2.0, y=3.0))  # Act 2: back to the posts
     assert not any(swarm.agents[d].patrolling for d in roles)  # incl. the survivor drone (hovers again)
     assert st.phase == "chain_ready"
+
+
+# ---- chain shape by how many drones are left (W): 3 -> lead, midpoint, survivor; 2 -> lead, survivor; 1 -> lead ----
+
+
+def _chain_with(swarm: Swarm, keep: list[str]):
+    poses = {d: p for d, p in POSES.items() if d in keep}
+    _, rows, st = swarm.tick(0.0, _r(0.0, poses), [_found()])
+    return swarm.rescue.roles, st
+
+
+def test_three_drones_lead_midpoint_survivor(swarm: Swarm) -> None:
+    roles, st = _chain_with(swarm, ["D1", "D2", "D3"])
+    assert sorted(roles.values()) == ["lead", "sentinel", "survivor"]
+    mid = next(c for c in st.checkpoints if roles[c.drone] == "sentinel")
+    path = swarm.rescue.path
+    total = sum(math.dist(a, b) for a, b in zip(path, path[1:]))
+    s = 0.0
+    for a, b in zip(path, path[1:]):  # arc length of the checkpoint along the route: about half way
+        if math.dist(b, (mid.x, mid.y)) < 0.3:
+            break
+        s += math.dist(a, b)
+    assert 0.35 * total < s < 0.65 * total
+
+
+def test_two_drones_lead_and_survivor_only(swarm: Swarm) -> None:
+    roles, _ = _chain_with(swarm, ["D1", "D2"])
+    assert sorted(roles.values()) == ["lead", "survivor"]
+
+
+def test_one_drone_leads_the_firefighter_itself(swarm: Swarm) -> None:
+    roles, st = _chain_with(swarm, ["D1"])
+    assert roles == {"D1": "lead"} and st.lead == "D1"

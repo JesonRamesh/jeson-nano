@@ -270,21 +270,18 @@ class Rescue:
         self.path = new
         self.bb.route = Route(points=pts, status="ok", version=old.version + 1)
 
-    def _checkpoint_posts(self, turns, n: int, plan, cm) -> list[tuple[Pt, str]]:
-        """n checkpoint positions along the route: turns (sharpest first), then the middle of the longest
-        stretch between checkpoints so far, so the drones space themselves out as waypoints."""
+    def _checkpoint_posts(self, n: int, cm) -> list[tuple[Pt, str]]:
+        """n checkpoints spaced evenly along the route (the part still ahead in Act 2), each snapped to the nearest
+        route point a drone can hover at: the lead stands at one end and the survivor drone at the other."""
+        route = self._ahead(self.path)
+        pts = rdp(route, 0.1)
+        total = path_length(pts)
         posts: list[tuple[Pt, str]] = []
-        for (px, py), ang in turns[:n]:
-            posts.append(((px, py), f"checkpoint: {ang:.0f}° turn"))
-        taken = sorted({self._along(xy) for _, _, xy, _ in plan} | {self._along(xy) for xy, _ in posts}
-                       | {0.0, float(len(self.path) - 1)})
-        while len(posts) < n:
-            _, a, b = max((b - a, a, b) for a, b in zip(taken, taken[1:]))
-            k = int((a + b) / 2)
-            cands = sorted(range(len(self.path)), key=lambda q: abs(q - k))  # nearest point a drone can hover at
-            q = next((q for q in cands if self._flyable(cm, self.path[q])), k)
-            posts.append((self.path[q], "checkpoint: on the route"))
-            taken = sorted(taken + [float(q)])
+        for k in range(1, n + 1):
+            want = _point_at(pts, total * k / (n + 1))
+            q = min(range(len(route)), key=lambda q: math.dist(route[q], want) + (0 if self._flyable(cm, route[q]) else 1e3))
+            label = "checkpoint: route midpoint" if n == 1 else f"checkpoint {k}/{n} along the route"
+            posts.append((route[q], label))
         return posts
 
     def _flyable(self, cm, xy: Pt) -> bool:
@@ -351,21 +348,25 @@ class Rescue:
             return cost
 
         free = list(cands)
-        # the drone already over the survivor stays there (less shuffling); otherwise the nearest one
-        holder = next((d for d, r in self.roles.items() if r == "survivor" and d in free), None)
-        surv = holder or min(free, key=reach(target))
-        free.remove(surv)
-        plan: list[tuple[str, str, Pt, dict]] = [(surv, "survivor", target, {"task": "over the survivor"})]
-        if free:
-            meet = self.ff if self.ff is not None else self.entrance  # Act 2: lead with the firefighter
+        meet = self.ff if self.ff is not None else self.entrance  # Act 2: lead with the firefighter
+        face = self.path[min(5, len(self.path) - 1)]
+        lead_task = "lead: guiding the firefighter" if self.ff is not None else "lead: meet the firefighter"
+        plan: list[tuple[str, str, Pt, dict]] = []
+        if len(free) == 1:  # one drone left: it found the survivor, flies back and leads the firefighter in itself
+            plan.append((free.pop(), "lead", meet, {"face": face, "task": lead_task}))
+        else:
+            # the drone already over the survivor stays there (less shuffling); otherwise the one that gets there first
+            holder = next((d for d, r in self.roles.items() if r == "survivor" and d in free), None)
+            surv = holder or min(free, key=reach(target))
+            free.remove(surv)
+            plan.append((surv, "survivor", target, {"task": "over the survivor"}))
             keep = self.bb.lead if self.ff is not None and self.bb.lead in free else None  # Guidance steers it
             lead = keep or min(free, key=reach(meet))
             free.remove(lead)
-            face = self.path[min(5, len(self.path) - 1)]
-            task = "lead: guiding the firefighter" if self.ff is not None else "lead: meet the firefighter"
-            plan.append((lead, "lead", meet, {"face": face, "task": task}))
-        # every other drone becomes a checkpoint: the sharpest turns first, then the biggest gaps along the route
-        for xy, task in self._checkpoint_posts(turns, len(free), plan, cm):
+            plan.append((lead, "lead", meet, {"face": face, "task": lead_task}))
+        # any further drones: checkpoints spaced evenly along the route between the lead and the survivor
+        # (3 drones -> one at the route's midpoint; 2 -> none), so checkpoints never bunch up
+        for xy, task in self._checkpoint_posts(len(free), cm):
             d = min(free, key=near(xy))
             free.remove(d)
             plan.append((d, "sentinel", xy, {"sweep": True, "task": task}))
