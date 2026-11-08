@@ -1,13 +1,17 @@
 import { useProgress } from '@react-three/drei'
 import { useEffect, useState } from 'react'
 import type { ClientMsg } from '../contracts'
+import { IntroScene } from '../scene3d/IntroScene'
 import { sim, useSim } from '../state/store'
 
 // Start-up cover: while the sim connects and the 3D scan / drone models stream in (the dashboard
 // stutters meanwhile), blur everything and fly a drone around the four-point Gemini spark.
 // Once the sim is talking (hello + state) and the 3D loads have finished (plus a short settle so
 // the first heavy frames happen behind it; never longer than MAX_MS), the sim is held and a Start
-// button appears. The cover lifts, and the sim runs, only when Start is pressed.
+// button appears over the start scene: the firefighter's view from the entrance (how Act 2 opens)
+// with the four drones hovering in front of them. The start scene is mounted while the sim is being
+// prepared, behind the loading cover, so it has compiled by the time the cover fades into it.
+// Start fades the scene out onto the dashboard and runs the sim (Act 1).
 //
 // Holding the sim uses the existing controls (no server change): the sim starts running as soon as
 // it launches, so on a fresh run we Restart Act 1 (`reset` = the act1_start snapshot, t = 0), let it
@@ -108,7 +112,7 @@ export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
 
   useEffect(() => {
     if (phase !== 'leaving') return
-    const t = setTimeout(() => setPhase('gone'), 900)
+    const t = setTimeout(() => setPhase('gone'), 1200)
     return () => clearTimeout(t)
   }, [phase])
 
@@ -118,9 +122,7 @@ export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
     phase === 'arming'
       ? 'Preparing the mission'
       : armed
-        ? resume
-          ? 'Mission paused'
-          : 'Swarm ready'
+        ? 'Swarm ready'
         : !hello
           ? 'Connecting to the swarm'
           : !hasState
@@ -128,7 +130,24 @@ export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
             : 'Loading the 3D scan'
   const pct = total > 0 ? Math.round(progress) : null
   return (
-    <div className={`loading ${phase === 'leaving' ? 'leaving' : ''} ${armed ? 'armed' : ''}`} role="status" aria-live="polite">
+    <>
+    {phase !== 'loading' && (
+      <div className={`intro ${phase === 'leaving' ? 'leaving' : ''}`}>
+        <IntroScene />
+        <div className="intro-vignette" />
+        {(armed || phase === 'leaving') && (
+          <div className="intro-ui">
+            <div className="intro-kicker">Swarm-Guided Rescue</div>
+            <div className="intro-title">{resume ? 'Mission paused' : 'Four drones go in first. You follow.'}</div>
+            <button className="loading-start" onClick={go} autoFocus disabled={phase === 'leaving'}>
+              <span>{resume ? 'Resume mission' : 'Start mission'}</span>
+              <kbd>Enter</kbd>
+            </button>
+          </div>
+        )}
+      </div>
+    )}
+    <div className={`loading ${armed || phase === 'leaving' ? 'leaving' : ''}`} role="status" aria-live="polite">
       <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden>
         <defs>
           {/* gooey: blur the blobs together, then sharpen the alpha into one liquid shape */}
@@ -176,18 +195,12 @@ export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
       </div>
       <div className="loading-text">
         <div className="loading-title">{what}</div>
-        {armed ? (
-          <button className="loading-start" onClick={go} autoFocus>
-            <span>{resume ? 'Resume mission' : 'Start mission'}</span>
-            <kbd>Enter</kbd>
-          </button>
-        ) : (
-          <div className="loading-sub">
-            {phase === 'arming' ? '\u00a0' : pct !== null && hello ? `${pct}%` : '\u00a0'}
-            {phase === 'loading' && item && hello && pct !== null && pct < 100 ? ` · ${item.split('/').pop()?.split('?')[0]}` : ''}
-          </div>
-        )}
+        <div className="loading-sub">
+          {phase === 'arming' ? '\u00a0' : pct !== null && hello ? `${pct}%` : '\u00a0'}
+          {phase === 'loading' && item && hello && pct !== null && pct < 100 ? ` · ${item.split('/').pop()?.split('?')[0]}` : ''}
+        </div>
       </div>
     </div>
+    </>
   )
 }
