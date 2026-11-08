@@ -22,7 +22,7 @@ import mujoco
 import numpy as np
 from PIL import Image
 
-from . import mjcf, shapes
+from . import fog, mjcf, shapes
 from sgr.contracts import XY, CamInfo, Decoy, Fire, GroundTruth, Handle, Pose, Scenario
 
 from .heat import temperature_at
@@ -336,6 +336,30 @@ class World:
         r.scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = 0
         r.scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 0
         return r.render().copy(), info
+
+    def dashboard_frame(self, drone: str, frame: np.ndarray) -> np.ndarray:
+        """The copy of a drone frame shown on the dashboard: smoke fog by depth, like the firefighter view
+        (fog.UI_FOG_DENSITY, 0 = off). Call right after render_drone (same pose). Perception always gets
+        the clean frame."""
+        if fog.UI_FOG_DENSITY <= 0:
+            return frame
+        depth = self.render_depth(drone)
+        return frame if depth is None else fog.apply_fog(frame, depth, fog.UI_FOG_DENSITY)
+
+    def render_depth(self, drone: str) -> np.ndarray | None:
+        """Depth in metres for the same view as render_drone (call it right after). For UI effects (the
+        dashboard's smoke fog); None for a dead drone (its static is not fogged)."""
+        if drone in self._dead:
+            return None
+        if self._renderer is None:
+            self.render_drone(drone)
+        r = self._renderer
+        r.update_scene(self.data, camera=self._d[drone]["cam"], scene_option=self._scene_opt)
+        r.enable_depth_rendering()
+        try:
+            return r.render().copy()
+        finally:
+            r.disable_depth_rendering()
 
     def pixel_to_world(self, drone: str, u: int, v: int) -> XY | None:
         cid = self._d[drone]["cam"]
