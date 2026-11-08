@@ -1,6 +1,8 @@
 <div align="center">
 
-# Swarm-Guided Rescue
+# ResQ
+
+### Swarm-Guided Rescue
 
 **A phone scan of a real building becomes a live fire simulation. Four drones search it with their own sensors and an on-device Gemma model, re-plan when the building changes, then guide a firefighter to the survivor by voice and light.**
 
@@ -42,11 +44,11 @@
 
 <table>
 <tr>
-<td width="50%"><img src="docs/media/start-frame.jpg" alt="Start frame: the firefighter's view from the entrance with four drones overhead"></td>
+<td width="50%"><img src="docs/media/start-frame.jpg" alt="ResQ start screen: the firefighter's view from the entrance with the drones overhead"></td>
 <td width="50%"><img src="docs/media/dashboard-fire-confirmed.jpg" alt="Mission control dashboard during Act 1"></td>
 </tr>
 <tr>
-<td><b>Deploy.</b> The mission opens from the firefighter's view at the entrance, four drones hovering overhead. Pressing <kbd>Start</kbd> sends them in.</td>
+<td><b>Deploy.</b> The ResQ start screen puts you in the firefighter's view at the entrance, the drones hovering overhead: <i>"Drones go in first. You follow."</i> Pressing <kbd>Start mission</kbd> sends them in.</td>
 <td><b>Act 1: mission control.</b> The drones fan out, map the building, confirm four fires, lose one drone to a flare-up, find the survivor and form a relay chain.</td>
 </tr>
 <tr>
@@ -198,7 +200,7 @@ In Act 2 the firefighter can't read a map. They're in smoke, following lights an
 | **A personality for each drone** | `gemini-3.5-flash-lite` | Rewords the drone's line in its own character, in about 0.5 s: D1 a calm team leader, D2 warm and encouraging, D3 upbeat and quick, D4 precise and softly spoken. Used for the intro, progress updates and "wait for me" / "coming back to you" lines | Guidance feels like a team talking you in, not a looped recording. The same facts come out in fresh words, so repeated instructions don't become background noise |
 | **A distinct voice for each drone** | `gemini-3.8-flash-lite-tts` | Voices every drone line with its own prebuilt voice (D1 Charon, D2 Kore, D3 Puck, D4 Aoede) in about 2 s. The heads-up guidance lines get a calm "incident commander" voice (Orus), generated once at startup so they play instantly | With no visibility, the firefighter can tell **which drone** is speaking, and hear a handover from one checkpoint drone to the next, by voice alone |
 | **Gemma: Gemini's open sibling, on-device** | `gemma4:e4b` via Ollama | Checks every fire or survivor candidate from the drone cameras and returns a verdict, a confidence and a short caption ("Flames on the floor ahead.") | Gave us Gemini-family vision with **no network**, inside the control loop, on an 8 GB laptop GPU. The captions go straight into the decision log as evidence |
-| **Gemini design language** | — | The dashboard uses Gemini's four-point spark and colours to show AI at work: the spark on the loading screen, a Gemini-coloured glow on the 3D view and drone tiles while a Gemma check is running, the "confirmed" chip, and the ring on the Start button | Viewers can see at a glance when the AI is thinking and what it decided |
+| **Gemini design language** | — | The dashboard uses Gemini's four-point spark and colours to show AI at work: the spark on the loading screen, a Gemini-coloured glow on the 3D view and drone tiles while a Gemma check is running, the "confirmed" chip, the ring on the Start button, and the spark-coloured Q of the ResQ wordmark that turns with it | Viewers can see at a glance when the AI is thinking and what it decided |
 
 **Built so a cloud model can never put the firefighter at risk:**
 
@@ -278,7 +280,7 @@ The result: a **39 × 52 m** twin with 13 route nodes, 4 fires, 4 debris piles, 
 </tr>
 <tr>
 <td><b>Swarm links.</b> Relay tree from the entrance to each drone over the mapped route graph. It's a visual aid, not a simulated radio.</td>
-<td><b>Start-up.</b> The dashboard stays behind a loading cover until the sim, scan and models are ready, then holds the sim at t = 0 for the Start button.</td>
+<td><b>Start-up.</b> The dashboard stays behind a loading cover until the sim, scan and models are ready, then holds the sim at t = 0 on the ResQ start screen. Refreshing there re-arms in a few seconds.</td>
 </tr>
 </table>
 
@@ -321,54 +323,6 @@ flowchart LR
 
 ---
 
-## Quick start
-
-**Requirements:** Python 3.12, [uv](https://docs.astral.sh/uv/), Node 22. For real perception: [Ollama](https://ollama.com) with `gemma4:e4b` and a GPU with about 5 GB free.
-
-```bash
-# 1. Python deps
-uv sync
-
-# 2. Build the dashboard (the server serves web/dist)
-cd web && npm install && npm run build && cd ..
-
-# 3. Run the demo map with mock perception (no GPU needed)
-uv run sgr --map maps/marshgate-route --perception mock --voice template
-#    → open http://127.0.0.1:8000 and press Start
-```
-
-**With real, on-device Gemma (the demo setup):**
-
-```bash
-ollama pull gemma4:e4b
-uv run sgr --map maps/marshgate-route --perception local --voice template
-```
-
-**With Gemini drone voices:** put your key in `.env` as `GOOGLE_API_KEY=...` (or `GEMINI_API_KEY`) and run with `--voice auto` (the default) or `--voice gemini`. The console prints which Gemini models are voicing the drones.
-
-```bash
-uv run sgr --map maps/marshgate-route --perception local --voice gemini
-```
-
-**In the dashboard:**
-
-| Key / action | What it does |
-|---|---|
-| <kbd>Enter</kbd> | Start the mission from the start frame. On a run that's already under way: <kbd>Enter</kbd> resumes, <kbd>R</kbd> restarts Act 1 |
-| Click a tile | Focus it (<kbd>Esc</kbd> to go back) |
-| Click tool on the 3D map | Drop debris or start a fire anywhere; the drones only find out through their sensors |
-| ■ on a drone feed | Fail that drone (it loses its signal) |
-| <kbd>G</kbd> | Send in the firefighter (Act 2), once the chain is in position |
-| <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, arrows, mouse | Walk and look in the firefighter view |
-| <kbd>V</kbd> | Firefighter view: toggle Online · Gemini voices / Offline · text only |
-| <kbd>F</kbd> | Full screen |
-
-**Useful flags:** `--speed 2.5` (faster for video), `--no-render` (no camera rendering), `--no-server --max-ticks 600` (headless), `--voice auto|gemini|template|off`.
-
-**Tests:** `uv run pytest -q`
-
----
-
 ## Repository layout
 
 ```text
@@ -399,6 +353,61 @@ docs/media/     README images and clips (captured from a real run)
 - **The edge budget is measured in the backend but not shown on the dashboard** in this build. The measured numbers are in the table above.
 - **The firefighter's position in Act 2 comes straight from the sim** (standing in for a body-worn tracker); the drones still only learn about hazards through their sensors.
 - **Screens and clips in this README** were captured with `--perception mock` (scripted Gemma answers with simulated latency), so they could be recorded on a machine without the demo GPU.
+
+---
+
+## How to run
+
+**Requirements:** Python 3.12, [uv](https://docs.astral.sh/uv/), Node 22. For real perception: [Ollama](https://ollama.com) with `gemma4:e4b` and a GPU with about 5 GB free.
+
+```bash
+# 1. Python deps
+uv sync
+
+# 2. Build the dashboard (the server serves web/dist)
+cd web && npm install && npm run build && cd ..
+
+# 3. Run the demo map with mock perception (no GPU needed)
+uv run sgr --map maps/marshgate-route --perception mock --voice template
+#    → open http://127.0.0.1:8000, wait for the ResQ start screen, press Start mission
+```
+
+**With real, on-device Gemma (the demo setup):**
+
+```bash
+ollama pull gemma4:e4b
+uv run sgr --map maps/marshgate-route --perception local --voice template
+```
+
+**With Gemini drone voices:** put your key in `.env` as `GOOGLE_API_KEY=...` (or `GEMINI_API_KEY`) and run with `--voice auto` (the default) or `--voice gemini`. The console prints which Gemini models are voicing the drones.
+
+```bash
+uv run sgr --map maps/marshgate-route --perception local --voice gemini
+```
+
+**The start screen.** While the sim connects and the 3D scan loads, a loading cover shows a drone flying around the Gemini spark. When everything is ready, the sim is held at t = 0 and the **ResQ** start screen appears: the firefighter's view from the entrance with the drones overhead, the tagline *"Drones go in first. You follow."*, and:
+
+- **Start mission** (<kbd>Enter</kbd>) fades onto the dashboard and runs Act 1.
+- **Enter full screen** (<kbd>F</kbd>) goes full screen before you start (it becomes *Exit full screen* once you're in). Best for a live demo or a recording.
+- If you open the page on a run that's already under way, it says **Mission paused** and offers **Resume mission** (<kbd>Enter</kbd>) or **Restart mission** (<kbd>R</kbd>, back to the start of Act 1).
+- Refreshing the page on the start screen is safe: the sim stays paused and the screen is ready again within a few seconds.
+
+**In the dashboard:**
+
+| Key / action | What it does |
+|---|---|
+| <kbd>Enter</kbd> / <kbd>R</kbd> | Start screen: start (or resume) the mission / restart Act 1 when resuming |
+| Click a tile | Focus it (<kbd>Esc</kbd> to go back) |
+| Click tool on the 3D map | Drop debris or start a fire anywhere; the drones only find out through their sensors |
+| ■ on a drone feed | Fail that drone (it loses its signal) |
+| <kbd>G</kbd> | Send in the firefighter (Act 2), once the chain is in position |
+| <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, arrows, mouse | Walk and look in the firefighter view |
+| <kbd>V</kbd> | Firefighter view: toggle Online · Gemini voices / Offline · text only |
+| <kbd>F</kbd> | Full screen, anywhere (also the button on the start screen and the top-right corner of the dashboard) |
+
+**Useful flags:** `--speed 2.5` (faster for video), `--no-render` (no camera rendering), `--no-server --max-ticks 600` (headless), `--voice auto|gemini|template|off`.
+
+**Tests:** `uv run pytest -q`
 
 ---
 
