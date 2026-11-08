@@ -170,7 +170,7 @@ const PROPS: [string, number][] = [
 ]
 
 /** One drone body: W's GLB (accent tinted with the drone colour) or the glowing sphere fallback. */
-function DroneBody({ id, colour, url }: { id: string; colour: string; url?: string }) {
+export function DroneBody({ id, colour, url = DRONE_GLB_URL }: { id: string; colour: string; url?: string }) {
   return url ? (
     <Suspense fallback={<SphereBody colour={colour} />}>
       <GlbBody id={id} colour={colour} url={url} />
