@@ -95,8 +95,8 @@ AUTOPILOT_LOOKAHEAD_M = 1.2
 AUTOPILOT_BEHIND_M = 1.0  # stay at least this far behind the lead along the route ...
 AUTOPILOT_LEAD_STUCK_S = 5.0  # ... unless the lead hasn't moved for this long (holding at a hot zone): walk on
 CLICK_REACT_S = 30.0  # a judge click must be noticed within this (sim s): the patrol sweeps ~30 m stretches
-CLICK_RETRIES = 3  # a refused click is retried this many times ...
-CLICK_RETRY_STEP_M = 1.5  # ... this far along the route each time
+CLICK_RETRY_OFFSETS_M = (-1.5, 3.0, -3.0)  # a refused click is retried at these offsets along the route
+#                                            (back first: round a bend ahead may be out of every drone's view)
 CLICK_NEAR_M = 2.5  # a MARK_BLOCKED this close to the click counts as noticing it
 KEY_ACTIONS = {"CONFIRM_HAZARD", "REJECT_DETECTION", "RETREAT", "DRONE_LOST", "SURVIVOR_CONFIRMED", "REPLAN",
                "NO_ROUTE", "CHAIN_POSITION", "FF_CORRECTION", "MISSION_COMPLETE", "MARK_BLOCKED", "INSPECT"}
@@ -204,13 +204,18 @@ class Replay:
             c["checked"] = True
             if len(self.loop.click_stack) <= c["n"]:
                 pts = self.loop.swarm_state.route.points if self.loop.swarm_state else []
-                if c.get("tries", 0) < CLICK_RETRIES and len(pts) >= 2:  # a presenter clicks a bit further on
-                    dx, dy = _lookahead(pts, (c["x"], c["y"]), CLICK_RETRY_STEP_M)
-                    x, y = c["x"] + dx, c["y"] + dy
+                tries = c.get("tries", 0)
+                if tries < len(CLICK_RETRY_OFFSETS_M) and len(pts) >= 2:  # a presenter clicks a little way off
+                    o = c.get("origin", (c["x"], c["y"]))
+                    total = sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
+                    s0 = _arc(pts, o)
+                    off = CLICK_RETRY_OFFSETS_M[tries]  # back towards the entrance first (where the drones are)
+                    x, y = _along(pts, min(1.0, max(0.0, (s0 + off) / total)) if total > 0 else 1.0)
                     self._say(f"{self.loop.t:7.1f}  REPLAY click refused (a drone is right there): "
-                              f"clicking {CLICK_RETRY_STEP_M:.1f} m further on at ({x:.1f}, {y:.1f})")
+                              f"clicking {off:+.1f} m along the route at ({x:.1f}, {y:.1f})")
                     self.loop.bus.send_command(ClickMsg(mode="debris", x=float(x), y=float(y)))
-                    self._click = {**c, "x": x, "y": y, "t": self.loop.t, "checked": False, "tries": c.get("tries", 0) + 1}
+                    self._click = {**c, "x": x, "y": y, "t": self.loop.t, "checked": False, "tries": tries + 1,
+                                   "origin": o}
                     return
                 self._fail_click(f"click at ({c['x']:.1f}, {c['y']:.1f}) refused by the World "
                                  "(within 1 m of a drone / the firefighter / the survivor, or not a free cell)")

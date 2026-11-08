@@ -91,7 +91,8 @@ class SimLoop:
         self.swarm_state: SwarmState | None = None
         self._flared = False
         self.flare_fire: Handle | None = None
-        self.flare_victim: str | None = None
+        self.flare_victim: str | None = None  # the drone that fails in Act 1 (flare-up, or signal loss)
+        self.signal_lost: str | None = None  # set when it failed by signal loss instead of the flare-up
         self._frame_seq = 0
         self._cam_rr = 0
         self._last_state_pub = -math.inf
@@ -146,7 +147,14 @@ class SimLoop:
                 self.dead.add(victim)
                 self.flare_victim = victim
                 self._flared = True
-            else:
+            else:  # no safe flare-up: one drone still fails, by losing its signal (no fire, so no route risk)
+                victim = self._signal_loss_victim()
+                if victim is not None:
+                    w.kill_drone(victim)  # radio/power failure: it goes dark and stops publishing
+                    self.dead.add(victim)
+                    self.flare_victim = victim
+                    self.signal_lost = victim
+                    print(f"sgr: {victim} lost its signal at t={self.t:.1f}s (no safe spot for a flare-up)")
                 self._flared = True
         # 3 sensors (a dead drone publishes nothing = no heartbeat)
         alive = [d for d in s.drones.ids if d not in self.dead]
@@ -268,6 +276,29 @@ class SimLoop:
             return best
         print(f"sgr: flare-up skipped: no drone within {FLARE_FALLBACK_M:.0f} m of a fire after {waited:.0f} s")
         return None  # a flare-up far from the fires could cut the only route: skip the beat instead
+
+    def _signal_loss_victim(self) -> str | None:
+        """Which drone loses its signal when no flare-up is possible: one whose loss shows the swarm adapting
+        without wasting a key role -- the fire watcher, else an explorer, else a checkpoint drone; never the
+        drone over the survivor or the lead (the swarm would cope, but the demo reads better)."""
+        alive = [d for d in self.scenario.drones.ids if d not in self.dead]
+        if len(alive) < 2:
+            return None  # never the last drone
+        info = {sd.id: sd for sd in (self.swarm_state.drones if self.swarm_state else [])}
+
+        def rank(d: str) -> int:
+            sd = info.get(d)
+            status, task = (sd.status, sd.task) if sd else ("", "")
+            if status == "WATCHING":
+                return 0
+            if status not in ("CHAIN",):
+                return 1  # exploring / idle
+            if task.startswith("over the survivor") or task.startswith("lead"):
+                return 3
+            return 2  # checkpoint / sentinel
+
+        target = self.scenario.flare.target if self.scenario.flare else None
+        return min(alive, key=lambda d: (rank(d), d != target, d))
 
     def _flare_safe(self, drone: str, fires) -> bool:
         """A flare-up fire at this drone keeps every through-corridor open: far enough from them, and the summed

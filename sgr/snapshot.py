@@ -66,6 +66,7 @@ def capture(loop: Any) -> dict[str, Any]:
             "act": loop.act,
             "dead": sorted(loop.dead),
             "flared": loop._flared,
+            "signal_lost": getattr(loop, "signal_lost", None),
             "flare_victim": loop.flare_victim,
             "flare_fire": loop.flare_fire.model_dump() if loop.flare_fire else None,
             "click_stack": [h.model_dump() for h in loop.click_stack],
@@ -94,6 +95,7 @@ def restore(loop: Any, payload: dict[str, Any]) -> None:
     loop.t, loop.ticks, loop.act = s["t"], s["ticks"], s["act"]
     loop.dead = set(s["dead"])
     loop._flared, loop.flare_victim = s["flared"], s["flare_victim"]
+    loop.signal_lost = s.get("signal_lost")
     loop.flare_fire = Handle(**s["flare_fire"]) if s["flare_fire"] else None
     loop.click_stack = [Handle(**h) for h in s["click_stack"]]
     loop._frame_seq, loop._cam_rr = s["frame_seq"], s["cam_rr"]
