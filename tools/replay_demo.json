@@ -2,6 +2,7 @@
   "map": "maps/marshgate-route",
   "max_t": 320,
   "expect": [
+    "DRONE_LOST",
     "SURVIVOR_CONFIRMED",
     "CHAIN_POSITION",
     "chain_formed",

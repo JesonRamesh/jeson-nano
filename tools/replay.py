@@ -73,8 +73,8 @@ from sgr.swarm import Swarm  # noqa: E402
 DEFAULT_SCRIPT: dict[str, Any] = {
     "map": "maps/marshgate-route",
     "max_t": 320,
-    "expect": ["SURVIVOR_CONFIRMED", "CHAIN_POSITION", "chain_formed", "REPLAN", "chain_ready", "MISSION_COMPLETE",
-               "summary"],
+    "expect": ["DRONE_LOST", "SURVIVOR_CONFIRMED", "CHAIN_POSITION", "chain_formed", "REPLAN", "chain_ready",
+               "MISSION_COMPLETE", "summary"],
     "steps": [
         # the judge's change tool: debris on the route once the chain is in place (the drones then patrol the
         # route, so the click gets seen), then Undo. W's spot just south of the n4 junction: a REPLAN detour.
