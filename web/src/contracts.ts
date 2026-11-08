@@ -7,7 +7,7 @@
 // Conventions: metres, z up, x east, y north, radians CCW from +x unless `_deg`.
 // Belief cells (map_delta) are 0.2 m: i = column (x), j = row from the bottom (y).
 
-export const CONTRACT_VERSION = 3
+export const CONTRACT_VERSION = 4
 // v3: CalloutMsg (Act 2 drone voices).
 // v2: Scenario.checkpoints, Checkpoint.node. (SwarmState.relook_requests is Python-only:
 // SwarmState never crosses the WebSocket, so it has no mirror here.)
@@ -430,4 +430,10 @@ export interface FFInputMsg {
   yaw: number // absolute heading in radians (world frame), NOT a turn rate
 }
 
-export type ClientMsg = ClickMsg | UndoMsg | ControlMsg | Act2StartMsg | SnapshotMsg | FFInputMsg
+// v4 (experimental, W): the presenter fails a chosen drone; the sim refuses the last one flying
+export interface FailDroneMsg {
+  type: 'fail_drone'
+  drone: string
+}
+
+export type ClientMsg = ClickMsg | UndoMsg | ControlMsg | Act2StartMsg | SnapshotMsg | FFInputMsg | FailDroneMsg

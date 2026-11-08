@@ -338,6 +338,8 @@ export default function Dashboard() {
               state={state?.drones.find((s) => s.id === d.id)}
               detection={detections[d.id]}
               tempLimit={TEMP_LIMIT_C}
+              onFail={() => send({ type: 'fail_drone', drone: d.id })}
+              canFail={(state?.drones.filter((s) => s.alive).length ?? 0) > 1}
             />
           </Tile>
         ))}
