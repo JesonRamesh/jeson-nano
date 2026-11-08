@@ -75,6 +75,7 @@ LEAD_GAIN = 1.2
 CALLOUT_GAP_S = 7.0  # at most one drone callout per 7 s (a handover may come sooner): short, never a backlog
 FIRE_CALLOUT_M = 6.0
 FIRE_CALLOUT_AGAIN_S = 40.0
+FIRE_SAME_M = 6.0  # fire cells this close to an announced one are the same fire (a fire spreads over metres)
 SURVIVOR_CALLOUT_M = 8.0
 SURVIVOR_CALLOUT_MIN_M = 4.0  # closer than this, "Survivor reached" is about to play: say nothing
 LEAD_WAIT_CALLOUT_S = 5.0
@@ -152,6 +153,7 @@ class Guidance:
         out = [("HUD", t) for t in HUD_LINES]
         out += [(d, f"{d} here, taking over from {o}. Follow me.") for d in ids for o in ids if o != d]
         out += [(d, f"{d} here, I'm with the survivor. Nearly there.") for d in ids]
+        out += [(d, f"{d} here, {o} is down. Follow me.") for d in ids for o in ids if o != d]
         out += [(d, "Waiting for you. Walk to my light.") for d in ids]
         out += [(d, "Coming back for you. Follow the arrow.") for d in ids]
         return out
@@ -160,6 +162,7 @@ class Guidance:
         self._cl_last = -math.inf
         self._cl_intro = False
         self._cl_lead: str | None = None
+        self._cl_chain: set[str] = set()  # chain drones last tick (one dropping out = failed / lost)
         self._cl_fires: list[tuple[Pt, float]] = []  # (where, when) fires were announced
         self._cl_survivor = False
         self._cl_total: float | None = None
@@ -218,8 +221,11 @@ class Guidance:
         route = [tuple(q) for q in swarm.route.points]
         status = swarm.route.status
         self._track_route(t, swarm, route)
-        if self.lead is None or (swarm.lead and self.lead not in self._chain_drones(swarm)):
-            self.lead = swarm.lead or next((c.drone for c in swarm.checkpoints if c.drone), None)
+        if self.lead is None or not self._alive(swarm, self.lead) or (
+                swarm.lead and self.lead not in self._chain_drones(swarm)):
+            live = swarm.lead if self._alive(swarm, swarm.lead) else None
+            self.lead = live or next((c.drone for c in swarm.checkpoints
+                                      if c.drone and self._alive(swarm, c.drone)), None)
 
         proj = project(route, p) if len(route) >= 2 else None
         total = proj and sum(math.dist(a, b) for a, b in zip(route, route[1:]))
@@ -284,10 +290,16 @@ class Guidance:
             if self._at_survivor(swarm, lead):  # the last drone waits with the survivor: nothing left to follow
                 self._say(Callout(lead, "handover", f"{lead} here, I'm with the survivor. Nearly there.",
                                   {"from": self._cl_lead, "to": lead}), t)
+            elif not self._alive(swarm, self._cl_lead) or (
+                    self._cl_lead in self._cl_chain and self._cl_lead not in self._chain_drones(swarm)):
+                # the old lead dropped out of the chain (failed / lost): it didn't hand over, it's down
+                self._say(Callout(lead, "handover", f"{lead} here, {self._cl_lead} is down. Follow me.",
+                                  {"from": self._cl_lead, "to": lead}), t)
             else:
                 self._say(Callout(lead, "handover", f"{lead} here, taking over from {self._cl_lead}. Follow me.",
                                   {"from": self._cl_lead, "to": lead}), t)
         self._cl_lead = lead
+        self._cl_chain = set(self._chain_drones(swarm))
         if key == "follow":
             self._cl_wait_since = self._cl_wait_since if self._cl_wait_since is not None else t
         else:
@@ -330,7 +342,7 @@ class Guidance:
         if not FIRE_MARGIN_M + 0.3 < dist <= FIRE_CALLOUT_M:
             return None
         f = (float(self._fire_xy[k, 0]), float(self._fire_xy[k, 1]))
-        if any(math.dist(f, q) < 3.0 and t - when < FIRE_CALLOUT_AGAIN_S for q, when in self._cl_fires):
+        if any(math.dist(f, q) < FIRE_SAME_M and t - when < FIRE_CALLOUT_AGAIN_S for q, when in self._cl_fires):
             return None
         rel = math.degrees(wrap(bearing(p, f) - ff.yaw))
         if abs(rel) <= 35:
@@ -346,6 +358,11 @@ class Guidance:
         text = f"Fire ahead, {metres} metres. Stay with me." if side == "ahead" else f"Fire on your {side}, {metres} metres."
         return Callout(self._nearest_drone(swarm, f) or self.lead, "fire_side", text,
                        {"side": side, "distance_m": metres}, severity="warn")
+
+    @staticmethod
+    def _alive(swarm: SwarmState, drone: str | None) -> bool:
+        """The swarm's view (it learns a drone is gone from the missing heartbeat)."""
+        return drone is not None and all(sd.alive for sd in swarm.drones if sd.id == drone)
 
     @staticmethod
     def _at_survivor(swarm: SwarmState, drone: str) -> bool:
@@ -380,7 +397,7 @@ class Guidance:
     def _nearest_drone(self, swarm: SwarmState, xy: Pt) -> str | None:
         """The chain drone (or lead) closest to a fire, if within 8 m: it is the one watching it."""
         best, bd = None, 8.0
-        for dr in sorted(set(self._chain_drones(swarm)) | {self.lead}):
+        for dr in sorted(d for d in set(self._chain_drones(swarm)) | {self.lead} if self._alive(swarm, d)):
             q = self._pose_xy(dr)
             if q is not None and math.dist(q, xy) < bd:
                 best, bd = dr, math.dist(q, xy)
@@ -553,7 +570,7 @@ class Guidance:
         """FF within 2 m of the next chain drone -> it becomes the lead."""
         best = None
         for c in swarm.checkpoints:
-            if not c.drone or c.drone == self.lead:
+            if not c.drone or c.drone == self.lead or not self._alive(swarm, c.drone):
                 continue
             s = project(route, (c.x, c.y)).s
             if s > proj.s - 1.0 and (best is None or s < best[0]):
