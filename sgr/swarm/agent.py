@@ -31,6 +31,8 @@ SWEEP_WZ = 2.0  # rad/s
 THERMO_LEN = 40  # thermometer history: the last 4 s of (t, x, y, temp), to locate an unseen heat source
 SWEEP_EVERY_S = 15.0  # at most one 360° sweep per this many seconds ...
 SWEEP_APART_M = 3.0  # ... unless it is this far from the last one (no spinning on the spot)
+HEAT_SLOW_NORM, HEAT_SLOW_MS = 0.6, 0.6  # known heat >= ~50 °C: fly at most 0.6 m/s
+HEATING_S, HEATING_C = 0.5, 15.0  # retreating but this much hotter in this long: wrong way, reverse
 CROSS_MIN_SPEED = 0.3  # m/s: slower than this is hovering, not crossing
 SLOW_MS = 0.15  # below this speed, don't chase the travel direction (it flips around: spinning)
 SCAN_AMPL = math.radians(70)  # idle / sentinel camera scan: ±70° ...
@@ -165,6 +167,11 @@ class Agent:
             self.mode = "IDLE"
         self.invalidate()
 
+    def _heating_up(self, t: float) -> bool:
+        """Temperature rose by more than HEATING_C over the last HEATING_S."""
+        old = [tc for ts, _, _, tc in self.thermo if t - HEATING_S - 0.15 <= ts <= t - HEATING_S + 0.05]
+        return bool(old) and self.thermo[-1][3] - old[0] > HEATING_C
+
     @property
     def crossing(self) -> bool:
         """Moving along a planned path (not hovering): may pass briefly through heat between 70 and 150 °C."""
@@ -262,6 +269,11 @@ class Agent:
         done = False
 
         if self.mode == "RETREAT":
+            if self._heating_up(t):  # hotter while backing off: a fire nobody knows about is ahead -> turn round
+                v = self._v if float(np.linalg.norm(self._v)) > 0.05 else np.array([math.cos(pose.yaw), math.sin(pose.yaw)])
+                self._retreat_dir = tuple(-v / float(np.linalg.norm(v)))
+                self._retreat_path, self._retreat_left = None, RETREAT_M
+                self.thermo.clear()
             if self._retreat_path:
                 gx, gy = self._retreat_path[-1]
                 self._retreat_left -= config.CONTROL_DT
@@ -405,6 +417,11 @@ class Agent:
                     want, yaw_des = self._follow(pose, self.path, config.MAX_SPEED)
 
         # ------------------------------------------------------------ reflex
+        hi, hj = belief.world_to_cell(pose.x, pose.y)  # slow down in known heat: a retreat then starts before
+        if belief.inside(hi, hj) and belief.heat[hj, hi] >= HEAT_SLOW_NORM:  # half a metre of overshoot is +100 °C
+            n = float(np.linalg.norm(want))
+            if n > HEAT_SLOW_MS:
+                want = want * (HEAT_SLOW_MS / n)
         sep, wall = self._separation(pose, others), self._walls(pose, r.lidar)
         self.debug = (want, sep, wall)  # last command's parts (diagnostics)
         v = want + sep + wall

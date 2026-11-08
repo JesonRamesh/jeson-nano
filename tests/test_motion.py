@@ -142,4 +142,24 @@ def test_flare_never_hits_a_random_drone(test_map) -> None:
     loop = SimLoop(world, Perception(mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight),
                    Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids)), sc, render=False, realtime=False)
     assert loop._flare_victim(waited=5.0) == _WAIT
-    assert loop._flare_victim(waited=46.0) is None  # nobody near a fire after the 45 s wait: skip the flare-up
+    assert loop._flare_victim(waited=71.0) is None  # nobody near a fire after the 70 s wait: skip the flare-up
+
+
+def test_unexpected_heat_means_retreat_even_mid_crossing(test_map) -> None:
+    """The short-crossing allowance (70-150 °C) is only for heat the map predicted: hotter than expected = a
+    fire nobody has confirmed -> the normal 70 °C retreat (this kept drones out of 400+ °C)."""
+    sc = Scenario.load(test_map)
+    sw = Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids))
+    ag = sw.agents["D1"]
+    ag.mode = "TRANSIT"
+    ag._v = np.array([1.0, 0.0])  # moving along a path: "crossing"
+    sw.hazards.heat(1.0, "D1", Pose(x=8.0, y=10.0, z=1.6), 90.0, ag)  # 90 °C where the map expects nothing
+    assert ag.mode == "RETREAT"
+
+
+def test_flare_never_next_to_another_drone(test_map) -> None:
+    sc = Scenario.load(test_map)
+    world = FakeWorld(test_map, sc)  # all four drones start within ~0.7 m of each other at the entrance
+    loop = SimLoop(world, Perception(mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight),
+                   Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids)), sc, render=False, realtime=False)
+    assert not loop._flare_safe("D1", world.ground_truth().fires)  # another drone is right there

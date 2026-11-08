@@ -54,9 +54,10 @@ GUIDANCE_COOL_C = 45.0  # ... and keeps it until it has cooled below this
 RESYNC_S = 5.0  # wall seconds between full belief-map resyncs (late-joining browsers catch up)
 FLARE_NEAR_M = 3.7  # flare-up hits the drone nearest a fire if this close: the watcher AT its post (3.3 m)
 FLARE_CORRIDOR_M = 2.3  # never flare a drone this close to a through-corridor (posts are >= 2.5 m; a drone holds within 0.4 m) ...
+FLARE_CLEAR_M = 3.0  # no other drone this close to the flare-up victim
 FLARE_CORRIDOR_MAX_C = 140.0  # ... nor where the corridor would get this hot (drones may cross up to 150 °C)
 FLARE_FALLBACK_M = 6.0  # after the wait: the drone nearest a fire if this close, else no flare-up
-FLARE_MAX_WAIT_S = 45.0  # flare.t is a "not before": wait this long for a drone to be near a fire
+FLARE_MAX_WAIT_S = 70.0  # flare.t is a "not before": wait this long for a drone to be near a fire
 _WAIT = "__wait__"  # _flare_victim(): nobody near a fire yet, keep the flare pending
 _MOCK_FRAME = np.zeros((config.CAM_H, config.CAM_W, 3), dtype=np.uint8)
 
@@ -273,6 +274,12 @@ class SimLoop:
         heat on their centrelines stays under what a drone may cross (the firefighter's fire + 1 m is less)."""
         if self._corridor_dist(drone) < FLARE_CORRIDOR_M:
             return False
+        p0 = self.world.drone_pose(drone)
+        for o in self.scenario.drones.ids:  # never right next to another drone (it would be engulfed too)
+            if o != drone and o not in self.dead:
+                q = self.world.drone_pose(o)
+                if math.hypot(q.x - p0.x, q.y - p0.y) < FLARE_CLEAR_M:
+                    return False
         from sgr.swarm.rescue import through_edges
         from sgr.world.heat import temperature_at
 

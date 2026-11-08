@@ -24,8 +24,9 @@ Script (JSON):
     }
 
 Triggers: "t" = sim time; "after" = an event kind (chain_formed, replan, drone_lost, ...), a trace action
-(SURVIVOR_CONFIRMED, ...), a swarm phase (chain_ready = chain drones at their posts, no_route) or "prev"
-(when the previous step ran); "wait" = sim seconds after that.
+(SURVIVOR_CONFIRMED, ...), a swarm phase (chain_ready = chain drones at their posts, no_route),
+"click_noticed" (the swarm reacted to the last click) or "prev" (when the previous step ran);
+"wait" = sim seconds after that.
 Actions: click (x/y, on_route = fraction 0..1 along the current route, or ahead_of_ff = metres ahead of
 the firefighter along the route), undo, act2, reset, speed,
 save (name), ff_input (fwd/strafe/yaw), ff_autopilot (the firefighter follows the guidance arrow), stop.
@@ -79,13 +80,13 @@ DEFAULT_SCRIPT: dict[str, Any] = {
         # the judge's change tool: debris on the route once the chain is in place (the drones then patrol the
         # route, so the click gets seen), then Undo. W's spot just south of the n4 junction: a REPLAN detour.
         {"after": "chain_ready", "wait": 3, "do": "click", "mode": "debris", "x": 5.8, "y": 24.8},
-        {"after": "prev", "wait": 12, "do": "undo"},
+        {"after": "click_noticed", "wait": 8, "do": "undo"},  # like a presenter: undo once the swarm reacted
         # Act 2 from the snapshot (saved once the chain is at its posts), the firefighter walks the arrow
         {"after": "prev", "wait": 4, "do": "act2"},
         {"after": "prev", "wait": 0.5, "do": "ff_autopilot"},
         # §9 "Route becomes unsafe": debris lands ahead of the walking firefighter, then the judge undoes it
         {"after": "prev", "wait": 15, "do": "click", "mode": "debris", "ahead_of_ff": 5},
-        {"after": "prev", "wait": 8, "do": "undo"},
+        {"after": "click_noticed", "wait": 6, "do": "undo"},
         {"after": "MISSION_COMPLETE", "wait": 3, "do": "stop"},
     ],
 }
@@ -94,6 +95,8 @@ AUTOPILOT_LOOKAHEAD_M = 1.2
 AUTOPILOT_BEHIND_M = 1.0  # stay at least this far behind the lead along the route ...
 AUTOPILOT_LEAD_STUCK_S = 5.0  # ... unless the lead hasn't moved for this long (holding at a hot zone): walk on
 CLICK_REACT_S = 30.0  # a judge click must be noticed within this (sim s): the patrol sweeps ~30 m stretches
+CLICK_RETRIES = 3  # a refused click is retried this many times ...
+CLICK_RETRY_STEP_M = 1.5  # ... this far along the route each time
 CLICK_NEAR_M = 2.5  # a MARK_BLOCKED this close to the click counts as noticing it
 KEY_ACTIONS = {"CONFIRM_HAZARD", "REJECT_DETECTION", "RETREAT", "DRONE_LOST", "SURVIVOR_CONFIRMED", "REPLAN",
                "NO_ROUTE", "CHAIN_POSITION", "FF_CORRECTION", "MISSION_COMPLETE", "MARK_BLOCKED", "INSPECT"}
@@ -200,6 +203,15 @@ class Replay:
         if not c["checked"] and self.loop.t > c["t"] + 0.05:  # the loop has applied it by now
             c["checked"] = True
             if len(self.loop.click_stack) <= c["n"]:
+                pts = self.loop.swarm_state.route.points if self.loop.swarm_state else []
+                if c.get("tries", 0) < CLICK_RETRIES and len(pts) >= 2:  # a presenter clicks a bit further on
+                    dx, dy = _lookahead(pts, (c["x"], c["y"]), CLICK_RETRY_STEP_M)
+                    x, y = c["x"] + dx, c["y"] + dy
+                    self._say(f"{self.loop.t:7.1f}  REPLAY click refused (a drone is right there): "
+                              f"clicking {CLICK_RETRY_STEP_M:.1f} m further on at ({x:.1f}, {y:.1f})")
+                    self.loop.bus.send_command(ClickMsg(mode="debris", x=float(x), y=float(y)))
+                    self._click = {**c, "x": x, "y": y, "t": self.loop.t, "checked": False, "tries": c.get("tries", 0) + 1}
+                    return
                 self._fail_click(f"click at ({c['x']:.1f}, {c['y']:.1f}) refused by the World "
                                  "(within 1 m of a drone / the firefighter / the survivor, or not a free cell)")
                 return
@@ -225,6 +237,7 @@ class Replay:
         if hit:
             self._say(f"{t:7.1f}  REPLAY click noticed after {t - c['t']:.1f} s ({msg.action} by {msg.drone})")
             self._click = None
+            self.happened["click_noticed"] = t  # trigger for "undo once the swarm has reacted"
 
     def _due(self, step: dict[str, Any]) -> bool:
         if "t" in step:
@@ -260,6 +273,7 @@ class Replay:
                 x, y = _along(pts, float(step["on_route"]))
             bus.send_command(ClickMsg(mode=step.get("mode", "debris"), x=float(x), y=float(y)))
             note = f"{step.get('mode', 'debris')} at ({x:.1f}, {y:.1f})"
+            self.happened.pop("click_noticed", None)  # this click's reaction, not the last one's
             self._click = {"t": t, "x": float(x), "y": float(y), "n": len(self.loop.click_stack), "checked": False}
         elif do == "undo":
             bus.send_command(UndoMsg())

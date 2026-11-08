@@ -36,7 +36,7 @@ Cell = tuple[int, int]  # (i, j)
 class CostMap:
     """Traversable mask + per-cell cost for one belief version (cached on `belief.version`)."""
 
-    def __init__(self, belief: BeliefGrid, drone: bool = True) -> None:
+    def __init__(self, belief: BeliefGrid, drone: bool = True, cool: bool = False) -> None:
         self.version = belief.version
         self.drone = drone
         res = belief.res
@@ -49,18 +49,18 @@ class CostMap:
         self.traversable &= ~obstacle & ~fire
         self.obstacle = obstacle | fire  # raw (uninflated): a diagonal step may not squeeze between two of these
         if drone:
-            self.traversable &= belief.heat < HOT_CORE
+            self.traversable &= belief.heat < (NO_STAY if cool else HOT_CORE)  # cool: retreats never cross heat
         near_wall = np.clip((NEAR_WALL_M - (d_obs - res / 2)) / (NEAR_WALL_M - INFLATE_M), 0.0, 1.0)
         heat = np.clip(belief.heat, 0.0, 4.0)  # heat_norm > 1 near a fire: the closer, the dearer
         self.cost = 1.0 + 5.0 * heat + 3.0 * near_wall
         self.mcp_cost = np.where(self.traversable, self.cost, np.inf)
 
 
-def cost_map(belief: BeliefGrid, drone: bool = True) -> CostMap:
-    attr = "_costmap" if drone else "_costmap_ff"
+def cost_map(belief: BeliefGrid, drone: bool = True, cool: bool = False) -> CostMap:
+    attr = ("_costmap_cool" if cool else "_costmap") if drone else "_costmap_ff"
     cm = getattr(belief, attr, None)
     if cm is None or cm.version != belief.version:
-        cm = CostMap(belief, drone)
+        cm = CostMap(belief, drone, cool)
         setattr(belief, attr, cm)
     return cm
 
@@ -131,9 +131,9 @@ def astar(belief: BeliefGrid, start: Point, goal: Point, drone: bool = True) -> 
 class DistanceField:
     """Dijkstra from one start over the cost map (skimage MCP, C speed)."""
 
-    def __init__(self, belief: BeliefGrid, start: Point, drone: bool = True) -> None:
+    def __init__(self, belief: BeliefGrid, start: Point, drone: bool = True, cool: bool = False) -> None:
         self.belief = belief
-        cm = cost_map(belief, drone)
+        cm = cost_map(belief, drone, cool)
         self.start = snap(belief, cm, *start)
         if self.start is None:
             self.cost = np.full((belief.h, belief.w), np.inf)

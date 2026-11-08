@@ -40,7 +40,8 @@ HEAT_NORM_MAX = 4.0
 RETREAT_CLEAR_M = 3.5  # retreat to the nearest reachable spot at least this far from the heat
 RETREAT_COOLDOWN_S = 4.0
 CROSS_MAX_C = 150.0  # a drone crossing heat along its path retreats anyway above this ...
-CROSS_MAX_S = 6.0  # ... or if it has been over 70 °C this long (stuck in the heat)
+CROSS_MAX_S = 6.0
+CROSS_SURPRISE = 0.5  # measured heat_norm this far above what the map predicts = unknown heat: no crossing  # ... or if it has been over 70 °C this long (stuck in the heat)
 LOCATE_WINDOW_S = 3.0  # thermometer readings used to locate an unseen heat source
 LOCATE_R_M = 5.0  # search radius for it
 SUSPECT_NORM_MAX = 2.0  # a thermometer estimate can be off (mirror ambiguity): drones avoid stopping there and
@@ -191,6 +192,8 @@ class Hazards:
 
     # ------------------------------------------------------------------ heat
     def heat(self, t: float, drone: str, pose: Pose, temp: float, agent: Agent) -> None:
+        i, j = self.belief.world_to_cell(pose.x, pose.y)  # what the map predicted here, BEFORE this reading
+        expected = float(self.belief.heat[j, i]) if self.belief.inside(i, j) else 0.0  # is written into it
         if temp > config.HEAT_DANGER_C:
             norm = min(HEAT_NORM_MAX, (temp - config.AMBIENT_C) / (config.HEAT_RETREAT_C - config.AMBIENT_C))
             for i, j in self._disc(pose.x, pose.y, DANGER_RADIUS_M):
@@ -204,8 +207,10 @@ class Hazards:
             self._hot_since.pop(drone, None)
         else:
             self._hot_since.setdefault(drone, t)
-        crossing = (agent.crossing and temp < CROSS_MAX_C
-                    and t - self._hot_since.get(drone, t) < CROSS_MAX_S)  # a short pass along its path
+        measured = (temp - config.AMBIENT_C) / (config.HEAT_RETREAT_C - config.AMBIENT_C)
+        crossing = (agent.crossing and temp < CROSS_MAX_C and measured <= expected + CROSS_SURPRISE
+                    and t - self._hot_since.get(drone, t) < CROSS_MAX_S)  # a short pass through KNOWN heat only:
+        # hotter than the map predicts here = a fire nobody has confirmed yet -> the normal 70 °C rule
         if (temp > config.HEAT_RETREAT_C and agent.mode != "RETREAT" and not crossing
                 and t - self._last_retreat.get(drone, -math.inf) > RETREAT_COOLDOWN_S):
             self._last_retreat[drone] = t
@@ -358,7 +363,9 @@ class Hazards:
         if src is None:
             return None
         b = self.belief
-        df = DistanceField(b, (pose.x, pose.y))
+        df = DistanceField(b, (pose.x, pose.y), cool=True)  # escaping: never through more heat
+        if df.start is None:
+            df = DistanceField(b, (pose.x, pose.y))
         jj, ii = np.mgrid[0 : b.h, 0 : b.w]
         cx = b.origin[0] + (ii + 0.5) * b.res
         cy = b.origin[1] + (jj + 0.5) * b.res
