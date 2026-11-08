@@ -11,6 +11,7 @@ import { CommsGraph } from './CommsGraph'
 import { NetworkGraph } from './NetworkGraph'
 import { GeminiFlare } from '../ui/GeminiFlare'
 import { LoadingScreen } from '../ui/LoadingScreen'
+import { toggleFullscreen } from '../ui/fullscreen'
 import '../ui/loading.css'
 import { TracePanel } from './TracePanel'
 import './dashboard.css'
@@ -41,11 +42,6 @@ function useFullscreen() {
     }
   }, [])
   return { on, toggle: toggleFullscreen }
-}
-
-function toggleFullscreen() {
-  if (document.fullscreenElement) void document.exitFullscreen()
-  else void document.documentElement.requestFullscreen()
 }
 
 function isTyping(e: KeyboardEvent) {

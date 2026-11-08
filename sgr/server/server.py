@@ -101,6 +101,9 @@ class Hub:
         # Replayed to browsers that connect mid-run, so they see the trace so far.
         self.trace_texts: deque[str] = deque(maxlen=TRACE_REPLAY)
         self.detection_texts: dict[str, str] = {}  # latest detection per drone
+        # Latest state, replayed on connect: a paused sim (the Start screen holds it) publishes nothing, so a
+        # browser that refreshes there would otherwise wait for a state that never comes.
+        self.state_text: str | None = None
         self._frames: dict[str, deque[FrameOut]] = {}  # drone -> recent frames
         self._frames_lock = threading.Lock()
 
@@ -139,6 +142,9 @@ class Hub:
                         self.hello_text = item.text
                         self.trace_texts.clear()  # new run: the loop re-sends its trace after hello
                         self.detection_texts.clear()
+                        self.state_text = None  # the old run's state is stale
+                    elif item.text.startswith('{"type":"state"'):
+                        self.state_text = item.text
                     elif item.text.endswith('"type":"trace"}'):  # TraceMsg puts `type` last
                         self.trace_texts.append(item.text)
                     elif item.text.startswith('{"type":"detection"'):
@@ -195,6 +201,8 @@ def create_app(hub: Hub, map_dir: Path | None = None) -> FastAPI:
             q.put_nowait(hub.hello_text)
             for text in [*hub.trace_texts, *hub.detection_texts.values()]:
                 q.put_nowait(text)
+            if hub.state_text:
+                q.put_nowait(hub.state_text)
         hub.clients.add(q)
 
         async def sender() -> None:
