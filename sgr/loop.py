@@ -47,6 +47,7 @@ from sgr.contracts import (
     TraceRow,
     UndoMsg,
     VelCmd,
+    VoiceModeMsg,
 )
 
 GUIDANCE_HOT_C = 60.0  # at/above this the swarm (not Guidance) moves the drone: it never enters > 70 °C
@@ -395,6 +396,10 @@ class SimLoop:
                 self.world.remove(self.click_stack.pop())
             elif isinstance(msg, FFInputMsg):
                 self.world.set_ff_input(msg.fwd, msg.strafe, msg.yaw)
+            elif isinstance(msg, VoiceModeMsg):  # Act 2 switch: online (Gemini) / offline (local) voices
+                if hasattr(self.guidance, "set_voice_mode"):
+                    self.guidance.set_voice_mode(msg.mode)
+                    print(f"sgr: Act 2 voices {getattr(self.guidance, 'voice_mode', msg.mode)}")
             elif isinstance(msg, ControlMsg):
                 if msg.action == "pause":
                     self.paused = True
@@ -515,6 +520,7 @@ class SimLoop:
             checkpoints=ss.checkpoints if ss else [],
             survivor=ss.survivor if ss else None,
             click_handles=list(self.click_stack),
+            voice=getattr(self.guidance, "voice_mode", None),
         )
 
     def _publish(self, msg: Any) -> None:

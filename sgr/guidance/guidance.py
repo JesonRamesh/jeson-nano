@@ -76,7 +76,20 @@ FIRE_CALLOUT_AGAIN_S = 40.0
 SURVIVOR_CALLOUT_M = 8.0
 SURVIVOR_CALLOUT_MIN_M = 4.0  # closer than this, "Survivor reached" is about to play: say nothing
 LEAD_WAIT_CALLOUT_S = 5.0
+URGENT_GAP_S = 4.0  # fire / turn warnings may follow another line this soon (others wait CALLOUT_GAP_S)
+TURN_CALLOUT_M = (3.0, 8.0)  # announce a corner this far ahead along the route
+TURN_MIN_DEG = 50.0
+DISTANCE_EVERY_M = 20.0  # "40 metres to go." every 20 m (more than 12 m out)
 QUIET_KEYS = {"fire", "danger", "blocked", "noroute", "wrong", "complete"}  # the HUD voice has the floor
+# every fixed HUD line (GuidanceMsg.say); in online mode they are voiced by Gemini, pre-generated at startup
+HUD_LINES = ["Survivor reached. Mission complete.", "Stop. Fire ahead. Turn back.", "No safe route. Holding.",
+             "Stop. Route blocked.", "New route. Follow me.", "Waiting for a safe route.", "Wrong way. Turn around.",
+             "Bear right.", "Bear left.", "Follow me.", "Your drone is coming back to you. Follow the arrow.",
+             "Follow the drone."]
+
+
+def route_of(swarm: SwarmState) -> list:
+    return [tuple(q) for q in swarm.route.points]
 
 
 class Guidance:
@@ -85,7 +98,10 @@ class Guidance:
         self.prior = prior
         self.world = world
         self.voice = voice  # VoiceAgent (Gemini) or None: callouts use their fixed lines
+        self.voice_online = voice is not None  # the Act 2 switch: online (Gemini voices) / offline (local voices)
         self.callouts_on = callouts
+        if voice is not None and hasattr(voice, "prewarm"):
+            voice.prewarm(self._fixed_lines())
         self._callouts_out: list = []
         self.res = config.BELIEF_RES
         self.origin = tuple(prior.origin) if prior is not None else (0.0, 0.0)
@@ -111,6 +127,32 @@ class Guidance:
         self._returning = False
         self._reset_callouts()
 
+    # ---------------------------------------------------------------- voice mode (the Act 2 switch)
+    @property
+    def voice_mode(self) -> str:
+        if self.voice is None:
+            return "unavailable"
+        return "online" if self.voice_online else "offline"
+
+    def set_voice_mode(self, mode: str) -> None:
+        """online: Gemini words + voices for the drones and the HUD; offline: fixed lines, local voices, no network."""
+        if self.voice is None:
+            return
+        online = mode == "online"
+        if online != self.voice_online:
+            self.voice_online = online
+            self.voice.clear()  # nothing voiced in the old mode plays after the switch
+
+    @staticmethod
+    def _fixed_lines() -> list[tuple[str, str]]:
+        """Lines said word for word (no numbers): voiced once at startup so they play instantly."""
+        ids = ["D1", "D2", "D3", "D4"]
+        out = [("HUD", t) for t in HUD_LINES]
+        out += [(d, f"{d} here, taking over from {o}. Follow me.") for d in ids for o in ids if o != d]
+        out += [(d, "Waiting for you. Walk to my light.") for d in ids]
+        out += [(d, "Coming back for you. Follow the arrow.") for d in ids]
+        return out
+
     def _reset_callouts(self) -> None:
         self._cl_last = -math.inf
         self._cl_intro = False
@@ -123,6 +165,8 @@ class Guidance:
         self._cl_wait_said = False
         self._cl_return_said = False
         self._cl_done = False
+        self._cl_turns: list[Pt] = []
+        self._cl_dist_marks: set[int] = set()  # metres-to-go marks already announced
         self._callouts_out = []
         if self.voice is not None:
             self.voice.clear()
@@ -196,6 +240,10 @@ class Guidance:
             self._log(t, "MISSION_COMPLETE", text, {"ff": [round(ff.x, 2), round(ff.y, 2)],
                                                      "walked_m": round(self._walked, 1)})
         self._key = key
+        if say is not None and self.callouts_on and self.voice is not None and self.voice_online:
+            # online: the HUD line is voiced by Gemini too (pre-generated: instant), so all voices match
+            spoken = "Follow the drone." if key == "go" else say  # the distance is on screen
+            self.voice.submit(Callout("HUD", "hud", spoken, severity=sev))
         if self.callouts_on:
             self._callouts(t, ff, p, swarm, proj, key, remaining)
         msg = GuidanceMsg(arrow_deg=round(arrow, 1), distance=round(max(remaining, 0.0), 1), subtitle=text,
@@ -205,7 +253,7 @@ class Guidance:
     # ---------------------------------------------------------------- drone voices (callouts)
     def _say(self, c: Callout, t: float) -> None:
         self._cl_last = t
-        if self.voice is not None:
+        if self.voice is not None and self.voice_online:
             self.voice.submit(c)
         else:
             self._callouts_out.append(template_msg(c))
@@ -243,7 +291,8 @@ class Guidance:
             return
         if key != "returning":
             self._cl_return_said = False
-        if key in QUIET_KEYS or t - self._cl_last < CALLOUT_GAP_S:
+        since = t - self._cl_last
+        if key in QUIET_KEYS or since < URGENT_GAP_S:
             return
         if not self._cl_intro:
             self._cl_intro = True
@@ -255,9 +304,11 @@ class Guidance:
                 text = f"{lead} here. Follow me to the survivor."
             self._say(Callout(lead, "intro", text, {"name": lead}), t)
             return
-        c = self._fire_callout(t, ff, p, swarm) or self._survivor_callout(p, swarm) or self._progress_callout(remaining)
+        c = self._fire_callout(t, ff, p, swarm) or self._turn_callout(route_of(swarm), proj)  # urgent: 4 s gap
+        if c is None and since >= CALLOUT_GAP_S:
+            c = self._survivor_callout(p, swarm) or self._progress_callout(remaining)
         waited = self._cl_wait_since is not None and t - self._cl_wait_since >= LEAD_WAIT_CALLOUT_S
-        if c is None and waited and not self._cl_wait_said:
+        if c is None and waited and not self._cl_wait_said and since >= CALLOUT_GAP_S:
             self._cl_wait_said = True
             c = Callout(lead, "lead_wait", "Waiting for you. Walk to my light.")
         if c is not None:
@@ -290,6 +341,28 @@ class Guidance:
         return Callout(self._nearest_drone(swarm, f) or self.lead, "fire_side", text,
                        {"side": side, "distance_m": metres}, severity="warn")
 
+    def _turn_callout(self, route, proj) -> Callout | None:
+        """The next corner 3-8 m ahead along the route (heading change > 50 deg over 3 m): "Left turn in 5 metres."
+        Each corner once."""
+        if len(route) < 2:
+            return None
+        total = sum(math.dist(a, b) for a, b in zip(route, route[1:]))
+        best = None
+        s = proj.s + TURN_CALLOUT_M[0]
+        while s <= min(proj.s + TURN_CALLOUT_M[1], total - 1.5):
+            a, b, c = point_at(route, s - 1.5), point_at(route, s), point_at(route, s + 1.5)
+            if math.dist(a, b) > 0.5 and math.dist(b, c) > 0.5:
+                turn = math.degrees(wrap(bearing(b, c) - bearing(a, b)))
+                if abs(turn) >= TURN_MIN_DEG and (best is None or abs(turn) > abs(best[1])):
+                    best = (s, turn, b)
+            s += 0.5
+        if best is None or any(math.dist(best[2], q) < 4.0 for q in self._cl_turns):
+            return None
+        self._cl_turns.append(best[2])
+        side, metres = ("Left" if best[1] > 0 else "Right"), max(1, round(best[0] - proj.s))
+        return Callout(self.lead, "turn", f"{side} turn in {metres} metres.",
+                       {"side": side.lower(), "distance_m": metres}, severity="warn")
+
     def _nearest_drone(self, swarm: SwarmState, xy: Pt) -> str | None:
         """The chain drone (or lead) closest to a fire, if within 8 m: it is the one watching it."""
         best, bd = None, 8.0
@@ -317,8 +390,20 @@ class Guidance:
         n = round(remaining)
         if "half" not in self._cl_marks and 15 < remaining <= total / 2:  # the end is the survivor line's job
             self._cl_marks.add("half")
+            self._cl_dist_marks.update(k for k in self._dist_marks(total) if remaining <= k)
             return Callout(self.lead, "progress", f"Halfway there. {n} metres to go.", {"metres_left": n})
+        # every 20 m mark walked past (40, 20 ... metres to go), while more than 12 m out
+        passed = [k for k in self._dist_marks(total) if remaining <= k and k not in self._cl_dist_marks]
+        if remaining > 12 and passed:
+            self._cl_dist_marks.update(passed)
+            return Callout(self.lead, "progress", f"{n} metres to go.", {"metres_left": n})
         return None
+
+    @staticmethod
+    def _dist_marks(total: float) -> list[int]:
+        """Multiples of 20 m to go, at least 5 m into the walk: 60 m -> [40, 20]."""
+        return [int(k * DISTANCE_EVERY_M) for k in range(1, int(total // DISTANCE_EVERY_M) + 1)
+                if k * DISTANCE_EVERY_M < total - 5]
 
     # ---------------------------------------------------------------- rules
     def _rule(self, t, ff: Pose, p: Pt, swarm: SwarmState, route, proj, status, lead_state):
