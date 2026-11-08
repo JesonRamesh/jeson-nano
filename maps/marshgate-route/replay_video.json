@@ -1,0 +1,31 @@
+{
+  "map": "maps/marshgate-route",
+  "max_t": 400,
+  "expect": [
+    "DRONE_LOST",
+    "SURVIVOR_CONFIRMED",
+    "CHAIN_POSITION",
+    "chain_formed",
+    "REPLAN",
+    "chain_ready",
+    "MISSION_COMPLETE"
+  ],
+  "steps": [
+    {
+      "after": "chain_ready",
+      "wait": 3,
+      "do": "act2"
+    },
+    {
+      "after": "prev",
+      "wait": 0.5,
+      "do": "ff_autopilot"
+    },
+    {
+      "after": "MISSION_COMPLETE",
+      "wait": 12,
+      "do": "stop"
+    }
+  ],
+  "_note": "W: hands-free 1-minute video take. No judge clicks: the only judge input is driving the firefighter, which ff_autopilot stands in for. Run: uv run python tools/replay.py maps/marshgate-route/replay_video.json --live --speed 2.5, then open http://127.0.0.1:8000 full screen in OBS. The replay drives the sim itself: there is no Start button, it runs as soon as Gemma is ready. Takes ~175 s sim = ~70 s of video at 2.5x (Mission complete at ~163 s); the 12 s sim hold after MISSION_COMPLETE (~5 s at 2.5x) keeps the end card on screen before the process exits. Checked headless on main 2026-11-08: 7/7 beats."
+}
