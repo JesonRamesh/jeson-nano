@@ -27,11 +27,13 @@ import numpy as np
 from sgr.contracts import XY, Box, CamInfo, Detection, GemmaResult
 
 from .detector import FastDetector
-from .fusion import fuse
+from .fusion import MAX_RELOOKS, STRONG_PERSON_FAST, fuse
 from .gemma import GemmaClient, GemmaTimeout
 
 RELOOK_WAIT_S = 3.0
 REJECT_MAX_VIEW_M = 7.0  # a 'not fire / not a person' verdict only rejects if the view was this close
+RECHECK_S = 8.0  # a strong hi-vis person Gemma didn't agree with: ask again at most this often ...
+RECHECK_MOVED_M = 1.5  # ... and only from a camera this far from the last view asked about (a new angle)
 
 
 def _view_m(cam: CamInfo | None, xy) -> float:
@@ -50,6 +52,10 @@ class _Track:
     relook_since: float | None = None  # waiting for a fresh frame since this sim time
     view_m: float = 0.0  # camera-to-object distance of `frame`
     job_can_reject: bool = True  # the job in flight is a fresh, close view (may reject)
+    asked_at: float = -math.inf  # sim time of the last Gemma job
+    asked_from: tuple[float, float] | None = None  # camera xy of the last Gemma job
+    recheck: bool = False  # the job in flight is a quiet re-check of a strong person (see _recheck_due)
+    rechecks: int = 0
 
 
 class LivePerception:
@@ -84,7 +90,7 @@ class LivePerception:
                                 world_xy=XY(x=c.world_xy[0], y=c.world_xy[1]), score_fast=c.box.score_fast,
                                 status="pending", frame_id=frame_id, bbox=box)
                 tr = self._tracks[det.id] = _Track(det, frame.copy(), frame_id, view_m=_view_m(cam, c.world_xy))
-                self._queue(tr, fresh=True)
+                self._queue(tr, fresh=True, cam=cam)
                 self._out.append(det.model_copy())
             elif (tr := self._tracks.get(c.det_id)) is not None:
                 tr.frame, tr.frame_id, tr.view_m = frame.copy(), frame_id, _view_m(cam, c.world_xy)
@@ -93,12 +99,26 @@ class LivePerception:
                     "score_fast": max(tr.det.score_fast, c.box.score_fast), "bbox": box, "drone": drone,
                 })
                 if tr.relook_since is not None and t > tr.relook_since:
-                    self._queue(tr, fresh=True)
+                    self._queue(tr, fresh=True, cam=cam)
+                elif self._recheck_due(tr, cam):
+                    tr.recheck = True
+                    self._queue(tr, fresh=True, cam=cam)
         for tr in self._tracks.values():  # re-look fallback: no fresh view came, re-send the newest frame
             if tr.relook_since is not None and self.now - tr.relook_since >= RELOOK_WAIT_S:
                 self._queue(tr, fresh=False)
 
-    def _queue(self, tr: _Track, fresh: bool) -> None:
+    def _recheck_due(self, tr: _Track, cam: CamInfo) -> bool:
+        """A strong hi-vis person that Gemma didn't agree with, after the swarm's own closer looks: ask Gemma
+        again, quietly, from a new close viewpoint (Gemma misses the real survivor from some angles)."""
+        d = tr.det
+        if not (d.label == "person" and d.score_fast >= STRONG_PERSON_FAST and d.status in ("low_conf", "unconfirmed")
+                and d.relooks >= MAX_RELOOKS and tr.job is None and tr.relook_since is None):
+            return False
+        if self.now - tr.asked_at < RECHECK_S or tr.view_m > REJECT_MAX_VIEW_M:
+            return False
+        return tr.asked_from is None or math.dist(tr.asked_from, (cam.pose.x, cam.pose.y)) >= RECHECK_MOVED_M
+
+    def _queue(self, tr: _Track, fresh: bool, cam: CamInfo | None = None) -> None:
         """fresh = this frame is a new sighting. Only a fresh view from within REJECT_MAX_VIEW_M may reject:
         a stale frame or a far-away view can't show that the object isn't there (live run: a real fire
         was rejected from an 18 m / stale view and the swarm never found the survivor)."""
@@ -106,11 +126,24 @@ class LivePerception:
         tr.relook_since = None
         tr.job = self._seq
         tr.job_can_reject = fresh and tr.view_m <= REJECT_MAX_VIEW_M
+        tr.asked_at = self.now
+        if cam is not None:
+            tr.asked_from = (cam.pose.x, cam.pose.y)
         self._jobs.put((self._seq, tr.det.id, tr.frame, tr.frame_id))
 
     def _finish(self, tr: _Track, g: GemmaResult | None, frame_id: str) -> None:
         tr.job = None
         combined, status = fuse(tr.det.label, tr.det.score_fast, g, tr.det.relooks)
+        if tr.recheck:  # quiet re-check: only a confirmation is news
+            tr.recheck = False
+            tr.det = tr.det.model_copy(update={"gemma": g, "combined": combined, "frame_id": frame_id,
+                                               "status": status if status == "confirmed" else tr.det.status})
+            if status == "confirmed":
+                tr.rechecks += 1
+                # a new id: the swarm closed the old one when it stopped looking ("still unsure"), and ignores
+                # updates to closed detections; a fresh confirmed detection is taken as is
+                self._out.append(tr.det.model_copy(update={"id": f"{tr.det.id}-v{tr.rechecks}"}))
+            return
         if status == "rejected" and not tr.job_can_reject:
             status = "unconfirmed"  # couldn't see it properly: needs a second view, not a blacklist
         tr.det = tr.det.model_copy(update={"gemma": g, "combined": combined, "status": status, "frame_id": frame_id})

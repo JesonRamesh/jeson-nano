@@ -36,6 +36,10 @@ def _g(fire=False, person=False, conf=0.9) -> GemmaResult:
     ("fire", 0.62, _g(fire=True, conf=0.85), 0, 0.758, "low_conf"),  # weak colour: closer look first
     ("fire", 0.62, _g(fire=True, conf=0.85), 1, 0.758, "confirmed"),  # ...and agreed again up close
     ("fire", 0.62, _g(fire=False, conf=0.9), 1, 0.186, "rejected"),  # decoy seen head-on
+    # a strong hi-vis person is never rejected (Gemma misses the real survivor from some angles)
+    ("person", 0.95, _g(person=False, conf=0.8), 1, 0.285, "low_conf"),
+    ("person", 0.95, _g(person=False, conf=0.8), 2, 0.285, "unconfirmed"),
+    ("person", 0.60, _g(person=False, conf=0.8), 2, 0.18, "rejected"),  # a weak hit still can be
 ])
 def test_fusion(label, fast, g, relooks, combined, status):
     assert fuse(label, fast, g, relooks) == (pytest.approx(combined, abs=1e-3), status)
@@ -315,3 +319,42 @@ def test_live_far_view_cannot_reject(studio):
 def test_live_needs_pixel_to_world():
     with pytest.raises(ValueError):
         Perception(mode="local", gemma=ScriptedGemma(lambda f: _g()), warm=False)
+
+
+@needs_gl
+def test_live_strong_survivor_is_rechecked_from_a_new_angle_not_blacklisted(studio):
+    """Live run (W): Gemma said 'empty hallway' to the real survivor on every look and it was rejected +
+    blacklisted. A strong hi-vis hit now stays unsure, and a later close view from a new angle asks Gemma again;
+    only a confirmation is reported, as a fresh detection (the swarm closed the old one)."""
+    from sgr.perception import live as lv
+
+    answers = {"person": False}
+    client = ScriptedGemma(lambda f: _g(person=answers["person"], conf=0.9))
+    p = Perception(mode="local", pixel_to_world=studio.pixel_to_world, gemma=client, warm=False)
+    _frame(p, studio, "D2", 0.0)
+    det = _settle(p)[-1]
+    assert det.label == "person" and det.score_fast >= 0.9 and det.status == "low_conf"
+    for k in (1, 2):  # the swarm's two closer looks: Gemma still says no
+        p.request_relook(det.id)
+        p.poll()
+        _frame(p, studio, "D2", float(k), k + 1)
+        last = _settle(p)[-1]
+    assert last.status == "unconfirmed" and client.calls == 3  # not rejected, not blacklisted
+    _frame(p, studio, "D2", 3.0, 4)  # same spot, too soon: no new question
+    assert p.poll() == [] and client.calls == 3
+    pose = studio.drone_pose("D2")
+    studio.teleport_drone("D2", pose.x, pose.y + 1.6, pose.yaw)  # a new viewpoint ...
+    _frame(p, studio, "D2", 3.0 + lv.RECHECK_S, 5)  # ... after the re-check interval
+    time.sleep(0.2)
+    assert p.poll() == [] and client.calls == 4  # asked again; a 'no' is not news
+    answers["person"] = True  # from the next angle Gemma sees the survivor
+    studio.teleport_drone("D2", pose.x, pose.y - 0.2, pose.yaw)
+    _frame(p, studio, "D2", 3.0 + 2.5 * lv.RECHECK_S, 6)
+    end = time.time() + 3
+    out = []
+    while not out and time.time() < end:
+        out = p.poll()
+        time.sleep(0.01)
+    assert len(out) == 1 and out[0].status == "confirmed" and out[0].label == "person"
+    assert out[0].id == f"{det.id}-v1"  # a fresh detection the swarm will take
+    p.close()
