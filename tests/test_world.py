@@ -207,6 +207,21 @@ def test_ff_walks_and_collides(world):
     assert world.ff_pose().y > 2.1 + 0.2  # stopped by the wall (radius 0.25)
 
 
+def test_ff_can_turn_away_from_a_wall_while_walking(world):
+    """Walking into a wall must not lock the heading (wall friction used to out-torque the yaw actuator)."""
+    def walk(yaw, ticks):  # like the sim loop: one control update per 20 substeps
+        for _ in range(ticks):
+            world.set_ff_input(1.0, 0.0, yaw)
+            world.step(20)
+
+    walk(-math.pi / 2, 30)  # walk south, pressing into the corridor wall
+    y_wall = world.ff_pose().y
+    walk(math.pi / 2, 20)  # keep walking, now asking for north
+    f = world.ff_pose()
+    assert abs(f.yaw - math.pi / 2) < 0.15
+    assert f.y > y_wall + 0.8
+
+
 def test_push_ff_back(world):
     f0 = world.ff_pose()
     world.push_ff_back()  # standing still, heading +x -> pushed to -x
