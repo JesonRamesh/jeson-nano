@@ -138,7 +138,8 @@ class Guidance:
         return "online" if self.voice_online else "offline"
 
     def set_voice_mode(self, mode: str) -> None:
-        """online: Gemini words + voices for the drones and the HUD; offline: fixed lines, local voices, no network."""
+        """online: Gemini words + voices for the drones and the HUD; offline: fixed lines, no network (the browser
+        shows them as text only, no voice-over)."""
         if self.voice is None:
             return
         online = mode == "online"

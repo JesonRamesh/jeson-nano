@@ -67,7 +67,8 @@ function Arrow({ deg }: { deg: number }) {
   )
 }
 
-/** The drones' voices: each callout is spoken once (Gemini audio, or a local voice per drone). */
+/** The drones' voices: each callout is spoken once (Gemini audio, or a local voice per drone when there is no
+ *  API key). Offline: silent -- the drone's line is only shown in its bubble. */
 function useDroneVoices(c: CalloutMsg | null, mode: VoiceMode) {
   const hello = useSim((s) => s.hello)
   const pushed = useRef<CalloutMsg | null>(null)
@@ -77,6 +78,7 @@ function useDroneVoices(c: CalloutMsg | null, mode: VoiceMode) {
   useEffect(() => {
     if (!c || pushed.current === c) return // once per line (StrictMode runs effects twice)
     pushed.current = c
+    if (mode === 'offline') return // no voice-over: the bubble / subtitle shows the line
     const hud = c.speaker === 'HUD' // online mode: the HUD line in a Gemini voice (offline: spoken from GuidanceMsg)
     if (hud && mode !== 'online') return
     const line = {
@@ -115,17 +117,50 @@ function CalloutBubble({ c }: { c: CalloutMsg | null }) {
   )
 }
 
-/** Act 2 voices: online = Gemini voices (drones + HUD), offline = local voices; unavailable = no API key. */
+/** Act 2 voices: online = Gemini voices (drones + HUD); offline = no voice, on-screen instructions only;
+ *  unavailable = no API key (falls back to local voices so the demo is never silent by accident). */
 type VoiceMode = 'online' | 'offline' | 'unavailable' | null
 
-/** Speaks guidance with a local (offline) voice through the shared headset queue; danger lines interrupt.
- *  In online mode the HUD lines arrive as Gemini-voiced callouts instead. One beep per alarm. */
+/** The Online / Offline voice switch (top right of the firefighter view). V toggles it. */
+function VoiceSwitch({ mode, send }: { mode: VoiceMode; send: (m: ClientMsg) => void }) {
+  const can = mode === 'online' || mode === 'offline'
+  useEffect(() => {
+    if (!can) return
+    const down = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'v' || e.ctrlKey || e.metaKey || e.altKey) return
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      send({ type: 'voice_mode', mode: mode === 'online' ? 'offline' : 'online' })
+    }
+    window.addEventListener('keydown', down)
+    return () => window.removeEventListener('keydown', down)
+  }, [can, mode, send])
+  if (!mode) return null
+  return (
+    <div className="ff-voice" onClick={(e) => e.stopPropagation()} title="Act 2 voices (V)">
+      <span className="ff-voice-label">Voices</span>
+      <button
+        className={mode === 'online' ? 'on' : ''}
+        disabled={!can}
+        onClick={() => send({ type: 'voice_mode', mode: 'online' })}
+      >
+        Online · Gemini
+      </button>
+      <button className={mode !== 'online' ? 'on' : ''} disabled={!can} onClick={() => send({ type: 'voice_mode', mode: 'offline' })}>
+        {mode === 'unavailable' ? 'Local voice (no API key)' : 'Offline · text only'}
+      </button>
+    </div>
+  )
+}
+
+/** Speaks guidance through the shared headset queue; danger lines interrupt. Online: the HUD lines arrive as
+ *  Gemini-voiced callouts instead. Offline: not spoken (the subtitle shows them). No API key: a local voice.
+ *  One beep per alarm in every mode (a warning tone, not voice-over). */
 function useVoiceAndAlarm(g: GuidanceMsg | null, mode: VoiceMode) {
   const audio = useRef<AudioContext | null>(null)
   const lastAlarm = useRef(false)
   useEffect(() => {
     if (!g) return
-    if (g.say && mode !== 'online') {
+    if (g.say && mode !== 'online' && mode !== 'offline') {
       const line = { text: g.say, speaker: null, severity: g.severity }
       if (g.say.startsWith('Survivor reached')) headset.finish(line) // last word: clear the queue, then silence
       else headset.push(line)
@@ -244,6 +279,7 @@ export function FirefighterView({ send }: { send: (m: ClientMsg) => void }) {
         </div>
       )}
       <CalloutBubble c={callout} />
+      <VoiceSwitch mode={voiceMode} send={send} />
       <div className="ff-subtitle">{g?.subtitle ? noEmDash(g.subtitle) : ffKnown ? 'Waiting for guidance' : 'Waiting for the firefighter'}</div>
       {!locked && <div className="ff-hint">Click to look around · WASD to walk · arrows to turn · Esc to release</div>}
     </div>
