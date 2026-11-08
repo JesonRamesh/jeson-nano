@@ -59,7 +59,7 @@ def test_fire_on_the_right_comes_from_the_drone_watching_it():
     _kinds(g)  # intro
     fire = [(37, 2, "fire")]  # cell centre (7.5, 0.5): 2.9 m to the right of an FF at (6, 3) heading +x
     out = []
-    for k in range(1, 60):
+    for k in range(1, 120):  # past the 7 s gap after the intro
         g.tick(k * 0.1, Pose(x=6.0, y=3.0, yaw=0.0), _swarm(t=k * 0.1, delta=fire if k == 1 else ()))
         out += _kinds(g)
     fires = [o for o in out if o[1] == "fire_side"]
@@ -69,16 +69,15 @@ def test_fire_on_the_right_comes_from_the_drone_watching_it():
     assert speaker == "D1"  # D3 is not in the chain; the lead is the nearest chain drone within 8 m
 
 
-def test_handover_both_drones_speak():
+def test_handover_is_one_line_from_the_new_lead():
     w = StubWorld({"D1": (17.0, 6.0), "D2": (16.0, 3.5)})
     g = Guidance(world=w)
     g.tick(0.0, Pose(x=10.0, y=3.0, yaw=0.0), _swarm())
     g.lead = "D1"
     _kinds(g)
-    g.tick(0.1, Pose(x=15.0, y=3.0, yaw=0.0), _swarm(t=0.1))  # within 2 m of D2 -> D2 leads
+    g.tick(0.1, Pose(x=15.0, y=3.0, yaw=0.0), _swarm(t=0.1))  # within 2 m of D2 -> D2 leads (even inside the gap)
     said = _kinds(g)
-    assert ("D1", "handover_out") in [s[:2] for s in said] and ("D2", "handover_in") in [s[:2] for s in said]
-    assert any("D2" in s[2] for s in said if s[1] == "handover_out")
+    assert said == [("D2", "handover", "D2 here, taking over from D1. Follow me.")]
 
 
 def test_quiet_while_the_hud_warns():
@@ -88,16 +87,25 @@ def test_quiet_while_the_hud_warns():
     assert _kinds(g) == []
 
 
-def test_survivor_close_and_progress():
+def test_survivor_close():
     g = Guidance(world=StubWorld({"D1": (20, 3), "D2": (16, 3)}))
     sv = SurvivorState(status="confirmed", x=16.0, y=15.0, conf=0.9)
     said, t = [], 0.0
-    for x, y in [(2.0, 3.0)] * 2 + [(15.5, 3.0)] * 50 + [(16.0, 9.0)] * 50:
+    for x, y in [(2.0, 3.0)] * 2 + [(15.5, 3.0)] * 50 + [(16.0, 9.0)] * 50:  # 6 m from the survivor
         g.tick(t, Pose(x=x, y=y, yaw=1.57), _swarm(t=t, survivor=sv))
         said += _kinds(g)
         t += 0.1
-    kinds = [s[1] for s in said]
-    assert kinds[0] == "intro" and "progress" in kinds and "survivor_close" in kinds
+    assert [s[1] for s in said] == ["intro", "handover", "survivor_close"]  # the walk passes D2's post
+    assert said[-1] == ("D2", "survivor_close", "Survivor just ahead, 6 metres.")
+
+
+def test_progress_halfway_once():
+    g = Guidance()
+    g._cl_total, g.lead = 60.0, "D1"
+    assert g._progress_callout(40) is None
+    c = g._progress_callout(29)
+    assert c.kind == "progress" and c.text == "Halfway there. 29 metres to go."
+    assert g._progress_callout(20) is None and g._progress_callout(10) is None  # the end is the survivor line's
 
 
 def test_snapshot_load_resets_the_conversation():
@@ -187,24 +195,38 @@ def _wait(agent: VoiceAgent, n: int = 1, timeout: float = 5.0):
     return out
 
 
+def progress() -> Callout:
+    return Callout("D2", "progress", "Halfway there. 30 metres to go.", {"metres_left": 30})
+
+
 def test_agent_rewords_and_voices():
-    agent, calls = _agent("Heads up, fire on your right, three metres out.")
-    agent.submit(fire())
+    agent, calls = _agent("Halfway now, thirty metres to go.")
+    agent.submit(progress())
     (m,) = _wait(agent)
     agent.close()
-    assert m.source == "gemini" and m.text == "Heads up, fire on your right, three metres out."
-    assert m.audio_b64 == WAV and m.audio_mime == "audio/wav" and m.speaker == "D2" and m.severity == "warn"
+    assert m.source == "gemini" and m.text == "Halfway now, thirty metres to go."
+    assert m.audio_b64 == WAV and m.audio_mime == "audio/wav" and m.speaker == "D2"
     tts_body = calls[-1][1]
     assert tts_body["contents"][0]["parts"][0]["text"] == m.text  # just the line: no style prompt read aloud
     assert tts_body["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
 
-def test_agent_falls_back_to_the_fixed_line_when_gemini_invents_things():
-    agent, _ = _agent("Fire on your left, turn back!")
+def test_urgent_lines_skip_the_rewording():
+    """A fire warning goes straight to the voice (the fixed line): ~0.5 s sooner."""
+    agent, calls = _agent("Heads up, fire on your right, three metres out.")
     agent.submit(fire())
     (m,) = _wait(agent)
     agent.close()
-    assert m.source == "template" and m.text == FIRE.text and m.audio_b64 == WAV  # fixed line, still voiced
+    assert m.source == "template" and m.text == fire().text and m.audio_b64 == WAV and m.severity == "warn"
+    assert [c[0] for c in calls] == [c[0] for c in calls if "tts" in c[0]]  # only the TTS model was called
+
+
+def test_agent_falls_back_to_the_fixed_line_when_gemini_invents_things():
+    agent, _ = _agent("Halfway there, fire on your left, 30 metres.")
+    agent.submit(progress())
+    (m,) = _wait(agent)
+    agent.close()
+    assert m.source == "template" and m.text == progress().text and m.audio_b64 == WAV  # fixed line, still voiced
     assert agent.stats["rejected"] == 1
 
 
