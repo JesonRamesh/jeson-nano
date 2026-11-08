@@ -99,13 +99,15 @@ def test_survivor_close():
     assert said[-1] == ("D2", "survivor_close", "Survivor just ahead, 6 metres.")
 
 
-def test_progress_halfway_once():
+def test_progress_every_20_m_and_halfway():
     g = Guidance()
     g._cl_total, g.lead = 60.0, "D1"
-    assert g._progress_callout(40) is None
-    c = g._progress_callout(29)
-    assert c.kind == "progress" and c.text == "Halfway there. 29 metres to go."
-    assert g._progress_callout(20) is None and g._progress_callout(10) is None  # the end is the survivor line's
+    assert g._progress_callout(55) is None  # still in the first 20 m band
+    assert g._progress_callout(39).text == "39 metres to go."
+    assert g._progress_callout(38) is None  # once per band
+    assert g._progress_callout(29).text == "Halfway there. 29 metres to go."
+    assert g._progress_callout(19).text == "19 metres to go."  # past the 20 m mark
+    assert g._progress_callout(10) is None  # the end is the survivor line's job
 
 
 def test_snapshot_load_resets_the_conversation():
@@ -265,3 +267,85 @@ def test_load_api_key_from_env_file(tmp_path, monkeypatch):
     assert load_api_key(f) == "abc123"
     monkeypatch.setenv("GOOGLE_API_KEY", "fromenv")
     assert load_api_key(f) == "fromenv"
+
+
+# ------------------------------------------------------------------ the online / offline switch (Act 2)
+class FakeAgent:
+    """Records what Guidance hands to the voice agent."""
+
+    def __init__(self):
+        self.submitted, self.prewarmed, self.cleared = [], [], 0
+
+    def submit(self, c):
+        self.submitted.append(c)
+
+    def poll(self):
+        return []
+
+    def clear(self):
+        self.cleared += 1
+
+    def prewarm(self, lines):
+        self.prewarmed += lines
+
+
+def test_online_voices_the_hud_too_and_prewarms_fixed_lines():
+    agent = FakeAgent()
+    g = Guidance(world=StubWorld({"D1": (5, 3), "D2": (16, 3)}), voice=agent)
+    assert g.voice_mode == "online"
+    assert ("HUD", "Stop. Fire ahead. Turn back.") in agent.prewarmed
+    assert ("D2", "D2 here, taking over from D1. Follow me.") in agent.prewarmed
+    g.tick(0.0, Pose(x=3.0, y=3.0, yaw=0.0), _swarm())
+    kinds = [(c.speaker, c.kind, c.text) for c in agent.submitted]
+    assert ("HUD", "hud", "Follow the drone.") in kinds  # the HUD line, without the changing distance
+    assert ("D1", "intro") in [k[:2] for k in kinds]
+
+
+def test_offline_never_touches_gemini():
+    agent = FakeAgent()
+    g = Guidance(world=StubWorld({"D1": (5, 3), "D2": (16, 3)}), voice=agent)
+    before = agent.cleared
+    g.set_voice_mode("offline")
+    assert g.voice_mode == "offline" and agent.cleared == before + 1  # lines voiced online are dropped
+    g.tick(0.0, Pose(x=3.0, y=3.0, yaw=0.0), _swarm())
+    assert agent.submitted == []  # nothing goes to the network
+    said = g.drain_callouts()
+    assert [m.kind for m in said] == ["intro"] and said[0].audio_b64 is None  # fixed line, local voice
+    g.set_voice_mode("online")
+    assert g.voice_mode == "online"
+
+
+def test_no_key_means_unavailable():
+    g = Guidance(world=StubWorld({"D1": (5, 3), "D2": (16, 3)}))
+    assert g.voice_mode == "unavailable"
+    g.set_voice_mode("online")  # can't go online without a key
+    assert g.voice_mode == "unavailable"
+
+
+def test_turn_warning_once_per_corner():
+    g = Guidance(world=StubWorld({"D1": (14, 3), "D2": (16, 3)}))
+    g.tick(0.0, Pose(x=3.0, y=3.0, yaw=0.0), _swarm())
+    _kinds(g)  # intro
+    out = []
+    for k in range(1, 80):  # walking towards the corner at (16, 3)
+        x = min(10.0 + k * 0.05, 12.5)
+        g.tick(k * 0.1, Pose(x=x, y=3.0, yaw=0.0), _swarm(t=k * 0.1))
+        out += _kinds(g)
+    turns = [o for o in out if o[1] == "turn"]
+    assert len(turns) == 1 and turns[0][2].startswith("Left turn in")  # north = CCW = left
+
+
+def test_cached_lines_play_instantly_and_uncached_hud_warnings_dont_wait():
+    agent, calls = _agent("unused")
+    agent._cache[("D2", "D2 here, taking over from D1. Follow me.")] = (WAV, "audio/wav")
+    agent.submit(Callout("D2", "handover", "D2 here, taking over from D1. Follow me."))
+    (m,) = agent.poll()  # no waiting: straight out of the cache
+    assert m.audio_b64 == WAV and agent.stats["cached"] == 1
+    agent.submit(Callout("HUD", "hud", "Wrong way. Turn around.", severity="warn"))
+    (w,) = agent.poll()  # a warning can't wait for TTS: local voice now ...
+    assert w.audio_b64 is None and w.text == "Wrong way. Turn around."
+    end = time.monotonic() + 3
+    while ("HUD", "Wrong way. Turn around.") not in agent._cache and time.monotonic() < end:
+        time.sleep(0.01)
+    assert ("HUD", "Wrong way. Turn around.") in agent._cache  # ... and voiced for next time
+    agent.close()

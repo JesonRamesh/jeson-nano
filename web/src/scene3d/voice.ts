@@ -178,4 +178,8 @@ class VoiceQueue {
   }
 }
 
-export const headset = new VoiceQueue()
+// One headset for the whole page. A hot reload (Vite) replaces the module: silence the old instance first,
+// otherwise two queues would talk over each other.
+const g = globalThis as { __sgrHeadset?: VoiceQueue }
+g.__sgrHeadset?.stop()
+export const headset: VoiceQueue = (g.__sgrHeadset = new VoiceQueue())

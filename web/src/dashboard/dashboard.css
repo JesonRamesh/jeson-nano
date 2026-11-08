@@ -1160,3 +1160,32 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   .feed-det::before { animation: none; }
 }
+
+/* Act 2 voice switch: Online (Gemini voices) / Offline (local voices) */
+.ff-voice {
+  position: absolute;
+  top: 22px;
+  right: 18px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(8, 10, 13, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+}
+.ff-voice-label { font: 500 11px/1 var(--mono); color: var(--dim); padding: 0 6px; text-transform: uppercase; letter-spacing: 0.06em; }
+.ff-voice button {
+  font: 500 13px/1 var(--sans);
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.ff-voice button.on { color: var(--text); background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.18); }
+.ff-voice button:disabled { cursor: default; opacity: 0.6; }
+.tile-rail .ff-voice { display: none; }
