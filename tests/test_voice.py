@@ -59,7 +59,7 @@ def test_fire_on_the_right_comes_from_the_drone_watching_it():
     _kinds(g)  # intro
     fire = [(37, 2, "fire")]  # cell centre (7.5, 0.5): 2.9 m to the right of an FF at (6, 3) heading +x
     out = []
-    for k in range(1, 60):
+    for k in range(1, 120):  # past the 7 s gap after the intro
         g.tick(k * 0.1, Pose(x=6.0, y=3.0, yaw=0.0), _swarm(t=k * 0.1, delta=fire if k == 1 else ()))
         out += _kinds(g)
     fires = [o for o in out if o[1] == "fire_side"]
@@ -69,16 +69,15 @@ def test_fire_on_the_right_comes_from_the_drone_watching_it():
     assert speaker == "D1"  # D3 is not in the chain; the lead is the nearest chain drone within 8 m
 
 
-def test_handover_both_drones_speak():
+def test_handover_is_one_line_from_the_new_lead():
     w = StubWorld({"D1": (17.0, 6.0), "D2": (16.0, 3.5)})
     g = Guidance(world=w)
     g.tick(0.0, Pose(x=10.0, y=3.0, yaw=0.0), _swarm())
     g.lead = "D1"
     _kinds(g)
-    g.tick(0.1, Pose(x=15.0, y=3.0, yaw=0.0), _swarm(t=0.1))  # within 2 m of D2 -> D2 leads
+    g.tick(0.1, Pose(x=15.0, y=3.0, yaw=0.0), _swarm(t=0.1))  # within 2 m of D2 -> D2 leads (even inside the gap)
     said = _kinds(g)
-    assert ("D1", "handover_out") in [s[:2] for s in said] and ("D2", "handover_in") in [s[:2] for s in said]
-    assert any("D2" in s[2] for s in said if s[1] == "handover_out")
+    assert said == [("D2", "handover", "D2 here, taking over from D1. Follow me.")]
 
 
 def test_quiet_while_the_hud_warns():
@@ -88,16 +87,40 @@ def test_quiet_while_the_hud_warns():
     assert _kinds(g) == []
 
 
-def test_survivor_close_and_progress():
+def test_near_the_survivor_says_so_not_follow_me():
     g = Guidance(world=StubWorld({"D1": (20, 3), "D2": (16, 3)}))
     sv = SurvivorState(status="confirmed", x=16.0, y=15.0, conf=0.9)
-    said, t = [], 0.0
-    for x, y in [(2.0, 3.0)] * 2 + [(15.5, 3.0)] * 50 + [(16.0, 9.0)] * 50:
-        g.tick(t, Pose(x=x, y=y, yaw=1.57), _swarm(t=t, survivor=sv))
+    said, t, m = [], 0.0, None
+    for x, y in [(2.0, 3.0)] * 2 + [(15.5, 3.0)] * 50 + [(16.0, 9.0)] * 50:  # 6 m from the survivor
+        m, _ = g.tick(t, Pose(x=x, y=y, yaw=1.57), _swarm(t=t, survivor=sv))
         said += _kinds(g)
         t += 0.1
-    kinds = [s[1] for s in said]
-    assert kinds[0] == "intro" and "progress" in kinds and "survivor_close" in kinds
+    assert m.subtitle == "Survivor ahead. 6 metres."  # the HUD, instead of "Follow me." / "Follow the drone."
+    assert [s[1] for s in said] == ["intro", "handover"]  # no extra drone line repeating it
+
+
+def test_handover_to_the_survivor_drone_is_not_follow_me():
+    sv = SurvivorState(status="confirmed", x=16.0, y=15.0, conf=0.9)
+    sw = lambda t: SwarmState(  # noqa: E731
+        t=t, route=Route(points=ROUTE, status="ok", version=1), lead="D1", chain_formed=True, survivor=sv,
+        checkpoints=[Checkpoint(x=16.0, y=15.0, drone="D3")])  # 2 drones left: lead + survivor drone
+    g = Guidance(world=StubWorld({"D1": (17.0, 9.0), "D3": (16.0, 13.0)}))
+    g.tick(0.0, Pose(x=16.0, y=7.0, yaw=1.57), sw(0.0))
+    g.lead = "D1"
+    _kinds(g)
+    g.tick(0.1, Pose(x=16.0, y=11.5, yaw=1.57), sw(0.1))  # within 2 m of D3 -> D3 leads
+    assert ("D3", "handover", "D3 here, I'm with the survivor. Nearly there.") in _kinds(g)
+
+
+def test_progress_every_20_m_and_halfway():
+    g = Guidance()
+    g._cl_total, g.lead = 60.0, "D1"
+    assert g._progress_callout(55) is None  # still in the first 20 m band
+    assert g._progress_callout(39).text == "39 metres to go."
+    assert g._progress_callout(38) is None  # once per band
+    assert g._progress_callout(29).text == "Halfway there. 29 metres to go."
+    assert g._progress_callout(19).text == "19 metres to go."  # past the 20 m mark
+    assert g._progress_callout(10) is None  # the end is the survivor line's job
 
 
 def test_snapshot_load_resets_the_conversation():
@@ -187,24 +210,38 @@ def _wait(agent: VoiceAgent, n: int = 1, timeout: float = 5.0):
     return out
 
 
+def progress() -> Callout:
+    return Callout("D2", "progress", "Halfway there. 30 metres to go.", {"metres_left": 30})
+
+
 def test_agent_rewords_and_voices():
-    agent, calls = _agent("Heads up, fire on your right, three metres out.")
-    agent.submit(fire())
+    agent, calls = _agent("Halfway now, thirty metres to go.")
+    agent.submit(progress())
     (m,) = _wait(agent)
     agent.close()
-    assert m.source == "gemini" and m.text == "Heads up, fire on your right, three metres out."
-    assert m.audio_b64 == WAV and m.audio_mime == "audio/wav" and m.speaker == "D2" and m.severity == "warn"
+    assert m.source == "gemini" and m.text == "Halfway now, thirty metres to go."
+    assert m.audio_b64 == WAV and m.audio_mime == "audio/wav" and m.speaker == "D2"
     tts_body = calls[-1][1]
     assert tts_body["contents"][0]["parts"][0]["text"] == m.text  # just the line: no style prompt read aloud
     assert tts_body["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
 
-def test_agent_falls_back_to_the_fixed_line_when_gemini_invents_things():
-    agent, _ = _agent("Fire on your left, turn back!")
+def test_urgent_lines_skip_the_rewording():
+    """A fire warning goes straight to the voice (the fixed line): ~0.5 s sooner."""
+    agent, calls = _agent("Heads up, fire on your right, three metres out.")
     agent.submit(fire())
     (m,) = _wait(agent)
     agent.close()
-    assert m.source == "template" and m.text == FIRE.text and m.audio_b64 == WAV  # fixed line, still voiced
+    assert m.source == "template" and m.text == fire().text and m.audio_b64 == WAV and m.severity == "warn"
+    assert [c[0] for c in calls] == [c[0] for c in calls if "tts" in c[0]]  # only the TTS model was called
+
+
+def test_agent_falls_back_to_the_fixed_line_when_gemini_invents_things():
+    agent, _ = _agent("Halfway there, fire on your left, 30 metres.")
+    agent.submit(progress())
+    (m,) = _wait(agent)
+    agent.close()
+    assert m.source == "template" and m.text == progress().text and m.audio_b64 == WAV  # fixed line, still voiced
     assert agent.stats["rejected"] == 1
 
 
@@ -243,3 +280,98 @@ def test_load_api_key_from_env_file(tmp_path, monkeypatch):
     assert load_api_key(f) == "abc123"
     monkeypatch.setenv("GOOGLE_API_KEY", "fromenv")
     assert load_api_key(f) == "fromenv"
+
+
+# ------------------------------------------------------------------ the online / offline switch (Act 2)
+class FakeAgent:
+    """Records what Guidance hands to the voice agent."""
+
+    def __init__(self):
+        self.submitted, self.prewarmed, self.cleared = [], [], 0
+
+    def submit(self, c):
+        self.submitted.append(c)
+
+    def poll(self):
+        return []
+
+    def clear(self):
+        self.cleared += 1
+
+    def prewarm(self, lines):
+        self.prewarmed += lines
+
+
+def test_online_voices_the_hud_too_and_prewarms_fixed_lines():
+    agent = FakeAgent()
+    g = Guidance(world=StubWorld({"D1": (5, 3), "D2": (16, 3)}), voice=agent)
+    assert g.voice_mode == "online"
+    assert ("HUD", "Stop. Fire ahead. Turn back.") in agent.prewarmed
+    assert ("D2", "D2 here, taking over from D1. Follow me.") in agent.prewarmed
+    g.tick(0.0, Pose(x=3.0, y=3.0, yaw=0.0), _swarm())
+    kinds = [(c.speaker, c.kind, c.text) for c in agent.submitted]
+    assert ("HUD", "hud", "Follow the drone.") in kinds  # the HUD line, without the changing distance
+    assert ("D1", "intro") in [k[:2] for k in kinds]
+
+
+def test_offline_never_touches_gemini():
+    agent = FakeAgent()
+    g = Guidance(world=StubWorld({"D1": (5, 3), "D2": (16, 3)}), voice=agent)
+    before = agent.cleared
+    g.set_voice_mode("offline")
+    assert g.voice_mode == "offline" and agent.cleared == before + 1  # lines voiced online are dropped
+    g.tick(0.0, Pose(x=3.0, y=3.0, yaw=0.0), _swarm())
+    assert agent.submitted == []  # nothing goes to the network
+    said = g.drain_callouts()
+    assert [m.kind for m in said] == ["intro"] and said[0].audio_b64 is None  # fixed line, local voice
+    g.set_voice_mode("online")
+    assert g.voice_mode == "online"
+
+
+def test_no_key_means_unavailable():
+    g = Guidance(world=StubWorld({"D1": (5, 3), "D2": (16, 3)}))
+    assert g.voice_mode == "unavailable"
+    g.set_voice_mode("online")  # can't go online without a key
+    assert g.voice_mode == "unavailable"
+
+
+def test_turn_warning_once_per_corner():
+    g = Guidance(world=StubWorld({"D1": (14, 3), "D2": (16, 3)}))
+    g.tick(0.0, Pose(x=3.0, y=3.0, yaw=0.0), _swarm())
+    _kinds(g)  # intro
+    out = []
+    for k in range(1, 80):  # walking towards the corner at (16, 3)
+        x = min(10.0 + k * 0.05, 12.5)
+        g.tick(k * 0.1, Pose(x=x, y=3.0, yaw=0.0), _swarm(t=k * 0.1))
+        out += _kinds(g)
+    turns = [o for o in out if o[1] == "turn"]
+    assert len(turns) == 1 and turns[0][2].startswith("Left turn in")  # north = CCW = left
+
+
+def test_cached_lines_play_instantly_and_uncached_hud_warnings_dont_wait():
+    agent, calls = _agent("unused")
+    agent._cache[("D2", "D2 here, taking over from D1. Follow me.")] = (WAV, "audio/wav")
+    agent.submit(Callout("D2", "handover", "D2 here, taking over from D1. Follow me."))
+    (m,) = agent.poll()  # no waiting: straight out of the cache
+    assert m.audio_b64 == WAV and agent.stats["cached"] == 1
+    agent.submit(Callout("HUD", "hud", "Wrong way. Turn around.", severity="warn"))
+    (w,) = agent.poll()  # a warning can't wait for TTS: local voice now ...
+    assert w.audio_b64 is None and w.text == "Wrong way. Turn around."
+    end = time.monotonic() + 3
+    while ("HUD", "Wrong way. Turn around.") not in agent._cache and time.monotonic() < end:
+        time.sleep(0.01)
+    assert ("HUD", "Wrong way. Turn around.") in agent._cache  # ... and voiced for next time
+    agent.close()
+
+
+def test_one_warning_per_fire_even_if_it_spans_cells():
+    g = Guidance(world=StubWorld({"D1": (7, 3), "D2": (16, 3)}))
+    g.tick(0.0, Pose(x=4.0, y=3.0, yaw=0.0), _swarm())
+    _kinds(g)
+    fire = [(i, j, "fire") for i in range(35, 41) for j in range(0, 4)]  # a 1.2 x 0.8 m fire south of the route
+    out = []
+    for k in range(1, 400):
+        x = 4.0 + k * 0.02  # walking past it slowly
+        g.tick(k * 0.1, Pose(x=x, y=3.0, yaw=0.0), _swarm(t=k * 0.1, delta=fire if k == 1 else ()))
+        out += _kinds(g)
+    assert len([o for o in out if o[1] == "fire_side"]) == 1

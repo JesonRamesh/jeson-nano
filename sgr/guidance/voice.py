@@ -36,7 +36,9 @@ TTS_MODEL = os.environ.get("SGR_VOICE_TTS_MODEL", "gemini-3.8-flash-lite-tts")  
 API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 TEXT_TIMEOUT_S = 2.0
 TTS_TIMEOUT_S = 4.0
-STALE_S = 4.0  # waited this long in the queue (Gemini slow / many lines): skip Gemini, say the fixed line now
+STALE_S = 3.0  # waited this long in the queue (Gemini slow / many lines): skip Gemini, say the fixed line now
+# only these get reworded by Gemini (+~0.5 s); urgent lines (fire, survivor, handover) go straight to the voice
+REWORD_KINDS = {"intro", "progress", "lead_wait", "lead_return"}
 QUEUE_MAX = 8
 
 # personality + Gemini TTS prebuilt voice per drone (distinct voices so the firefighter can tell them apart)
@@ -45,7 +47,9 @@ PERSONAS: dict[str, tuple[str, str]] = {
     "D2": ("warm and encouraging", "Kore"),
     "D3": ("upbeat and quick", "Puck"),
     "D4": ("precise and softly spoken", "Aoede"),
+    "HUD": ("calm incident commander", "Orus"),  # the HUD guidance lines in online mode
 }
+CACHE_MAX = 300  # voiced lines kept (fixed lines are pre-generated at startup: instant later)
 
 
 @dataclass
@@ -113,7 +117,7 @@ def check_line(line: str, c: Callout) -> str | None:
     """The reworded line if it says nothing the fixed line and facts don't; None -> use the fixed line."""
     line = " ".join(line.replace("*", "").replace('"', "").replace("“", "").replace("”", "").split()).strip()
     n = len(line.split())
-    if not 3 <= n <= 18:
+    if not 3 <= n <= 14:  # short: a long line delays the next one
         return None
     ref = f"{c.text} {json.dumps(c.facts)} {c.speaker}"
     if not set(_words(line)) & _DIRECTIONS <= set(_words(ref)) & _DIRECTIONS:
@@ -169,7 +173,9 @@ class VoiceAgent:
         self._thinking: dict[str, Any] | None = {"thinkingLevel": "minimal"}
         self._epoch = 0  # clear() bumps it: lines queued before a snapshot load are dropped
         self._log = log
-        self.stats = {"gemini": 0, "template": 0, "audio": 0, "rejected": 0, "errors": 0}
+        self.stats = {"gemini": 0, "template": 0, "audio": 0, "rejected": 0, "errors": 0, "cached": 0}
+        self._cache: dict[tuple[str, str], tuple[str, str]] = {}  # (speaker, text) -> (audio b64, mime)
+        self._cache_lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, name="sgr-voice", daemon=True)
         self._thread.start()
 
@@ -179,7 +185,33 @@ class VoiceAgent:
         return cls(key, **kw) if key else None
 
     # ------------------------------------------------------------ public
+    def prewarm(self, lines: list[tuple[str, str]]) -> None:
+        """Voice fixed lines in the background (HUD instructions, handovers...) so they play instantly later."""
+        def run() -> None:
+            for speaker, text in lines:
+                if self._cached(speaker, text) is None:
+                    self._speak(text, speaker)
+            if self._log:
+                print(f"sgr voice: {len(self._cache)} fixed lines voiced and cached")
+
+        threading.Thread(target=run, name="sgr-voice-prewarm", daemon=True).start()
+
+    def _cached(self, speaker: str, text: str) -> tuple[str, str] | None:
+        with self._cache_lock:
+            return self._cache.get((speaker, text))
+
     def submit(self, c: Callout) -> None:
+        if c.kind not in REWORD_KINDS:  # said word for word: an already voiced line plays at once
+            hit = self._cached(c.speaker, c.text)
+            if hit is not None:
+                self.stats["cached"] += 1
+                self._emit(CalloutMsg(speaker=c.speaker, kind=c.kind, text=c.text, severity=c.severity,
+                                      source="template", audio_b64=hit[0], audio_mime=hit[1]))
+                return
+            if c.speaker == "HUD" and c.severity != "info":  # a warning can't wait for TTS: local voice now
+                self._emit(template_msg(c))
+                self.prewarm([(c.speaker, c.text)])  # voiced next time
+                return
         try:
             self._in.put_nowait(c)
         except queue.Full:  # Gemini is far behind: say it now, plainly
@@ -234,7 +266,7 @@ class VoiceAgent:
             return template_msg(c)
         t0 = time.perf_counter()
         text, source = c.text, "template"
-        line = self._reword(c)
+        line = self._reword(c) if c.kind in REWORD_KINDS else None
         if line is not None:
             ok = check_line(line, c)
             if ok:
@@ -268,7 +300,7 @@ class VoiceAgent:
         system = (
             f"You are {c.speaker}, one of four small rescue drones guiding a firefighter through a dark, "
             f"smoke-filled building to a trapped survivor. Personality: {persona}. You talk to the firefighter "
-            "over their headset. Reply with ONE short spoken line (5 to 14 words), plain text, no quotes, no emojis. "
+            "over their headset. Reply with ONE short spoken line (4 to 10 words), plain text, no quotes, no emojis. "
             "Say the same thing as the default line, in your own words. Use ONLY the facts given: never add "
             "directions, hazards, places, names or numbers that are not in the facts or the default line."
         )
@@ -293,6 +325,9 @@ class VoiceAgent:
         return None
 
     def _speak(self, text: str, speaker: str) -> tuple[str | None, str | None]:
+        hit = self._cached(speaker, text)
+        if hit is not None:
+            return hit
         voice = PERSONAS.get(speaker, ("", "Kore"))[1] or "Kore"
         body = {"contents": [{"parts": [{"text": text}]}],  # just the line: style prompts get read out loud
                 "generationConfig": {"responseModalities": ["AUDIO"],
@@ -306,9 +341,17 @@ class VoiceAgent:
             return None, None
         mime = d.get("mimeType", "")
         if "wav" in mime:
-            return d["data"], "audio/wav"
-        if "l16" in mime.lower() or "pcm" in mime.lower():
+            out = d["data"], "audio/wav"
+        elif "l16" in mime.lower() or "pcm" in mime.lower():
             m = re.search(r"rate=(\d+)", mime)
             wav = _pcm_to_wav(base64.b64decode(d["data"]), int(m.group(1)) if m else 24000)
-            return base64.b64encode(wav).decode(), "audio/wav"
-        return (d["data"], mime) if mime.startswith("audio/") else (None, None)
+            out = base64.b64encode(wav).decode(), "audio/wav"
+        elif mime.startswith("audio/"):
+            out = d["data"], mime
+        else:
+            return None, None
+        with self._cache_lock:
+            if len(self._cache) >= CACHE_MAX:
+                self._cache.pop(next(iter(self._cache)))
+            self._cache[(speaker, text)] = out
+        return out

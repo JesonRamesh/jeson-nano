@@ -21,10 +21,11 @@ from typing import Annotated, Any, Literal, Union
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator
 
-CONTRACT_VERSION = 4
+CONTRACT_VERSION = 5
 # v2: Scenario.checkpoints, Checkpoint.node (W's authored checkpoints), SwarmState.relook_requests (§8.4)
 # v3: CalloutMsg (Act 2 drone voices)
-# v4: FailDroneMsg (experimental: the presenter fails a chosen drone; never the last one)
+# v4: VoiceModeMsg (online Gemini voices / offline local voices), StateMsg.voice
+# v5: FailDroneMsg (experimental: the presenter fails a chosen drone; never the last one)
 
 
 class _Base(BaseModel):
@@ -448,6 +449,7 @@ class StateMsg(_Base):
     checkpoints: list[Checkpoint] = []
     survivor: SurvivorState | None = None
     click_handles: list[Handle] = []
+    voice: Literal["online", "offline", "unavailable"] | None = None  # Act 2 voices (v4); unavailable = no API key
 
 
 class MapDeltaMsg(_Base):
@@ -498,7 +500,7 @@ class CalloutMsg(_Base):
 
     type: Literal["callout"] = "callout"
     speaker: str  # "D1".."D4"
-    kind: str  # intro | handover_out | handover_in | fire_side | survivor_close | progress | lead_wait
+    kind: str  # intro | handover | fire_side | turn | survivor_close | progress | lead_wait | lead_return | hud
     text: str  # what is said; also the subtitle
     severity: Severity = "info"
     source: Literal["gemini", "template"] = "template"  # who worded it
@@ -587,6 +589,13 @@ class FFInputMsg(_Base):
     yaw: float  # absolute heading, radians
 
 
+class VoiceModeMsg(_Base):
+    """Act 2 voices (v4): online = Gemini voices for the drones and the HUD; offline = local voices, no network."""
+
+    type: Literal["voice_mode"] = "voice_mode"
+    mode: Literal["online", "offline"]
+
+
 class FailDroneMsg(_Base):
     """Experimental (W): fail this drone now (it loses its signal: goes dark, stops publishing).
     The sim refuses if it would leave no drone flying, so at most all-but-one can fail."""
@@ -596,7 +605,7 @@ class FailDroneMsg(_Base):
 
 
 ClientMessage = Annotated[
-    Union[ClickMsg, UndoMsg, ControlMsg, Act2StartMsg, SnapshotMsg, FFInputMsg, FailDroneMsg],
+    Union[ClickMsg, UndoMsg, ControlMsg, Act2StartMsg, SnapshotMsg, FFInputMsg, VoiceModeMsg, FailDroneMsg],
     Field(discriminator="type"),
 ]
 

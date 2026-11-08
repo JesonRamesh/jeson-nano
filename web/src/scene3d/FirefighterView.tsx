@@ -68,16 +68,26 @@ function Arrow({ deg }: { deg: number }) {
 }
 
 /** The drones' voices: each callout is spoken once (Gemini audio, or a local voice per drone). */
-function useDroneVoices(c: CalloutMsg | null) {
+function useDroneVoices(c: CalloutMsg | null, mode: VoiceMode) {
+  const hello = useSim((s) => s.hello)
+  const pushed = useRef<CalloutMsg | null>(null)
   useEffect(() => {
-    if (!c) return
-    headset.push({
+    headset.reset() // a new run (fresh hello after a snapshot load / reconnect), or the voice switch flipped
+  }, [hello, mode])
+  useEffect(() => {
+    if (!c || pushed.current === c) return // once per line (StrictMode runs effects twice)
+    pushed.current = c
+    const hud = c.speaker === 'HUD' // online mode: the HUD line in a Gemini voice (offline: spoken from GuidanceMsg)
+    if (hud && mode !== 'online') return
+    const line = {
       text: c.text,
-      speaker: c.speaker,
+      speaker: hud ? null : c.speaker,
       severity: c.severity,
-      audio: c.audio_b64 && c.audio_mime ? { b64: c.audio_b64, mime: c.audio_mime } : null,
-    })
-  }, [c])
+      audio: mode === 'online' && c.audio_b64 && c.audio_mime ? { b64: c.audio_b64, mime: c.audio_mime } : null,
+    }
+    if (hud && c.text.startsWith('Survivor reached')) headset.finish(line)
+    else headset.push(line)
+  }, [c, mode])
   useEffect(() => () => headset.stop(), []) // leaving the view: silence
 }
 
@@ -86,7 +96,7 @@ function CalloutBubble({ c }: { c: CalloutMsg | null }) {
   const [shown, setShown] = useState<CalloutMsg | null>(null)
   const colour = useSim((s) => s.hello?.drones.find((d) => d.id === c?.speaker)?.colour)
   useEffect(() => {
-    if (!c) return
+    if (!c || c.speaker === 'HUD') return // the HUD line is already the subtitle
     const show = setTimeout(() => setShown(c), 0)
     const hide = setTimeout(() => setShown((cur) => (cur === c ? null : cur)), CALLOUT_SHOW_MS)
     return () => {
@@ -105,14 +115,52 @@ function CalloutBubble({ c }: { c: CalloutMsg | null }) {
   )
 }
 
+/** Act 2 voices: online = Gemini voices (drones + HUD), offline = local voices; unavailable = no API key. */
+type VoiceMode = 'online' | 'offline' | 'unavailable' | null
+
+/** The Online / Offline voice switch (top right of the firefighter view). V toggles it. */
+function VoiceSwitch({ mode, send }: { mode: VoiceMode; send: (m: ClientMsg) => void }) {
+  const can = mode === 'online' || mode === 'offline'
+  useEffect(() => {
+    if (!can) return
+    const down = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'v' || e.ctrlKey || e.metaKey || e.altKey) return
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      send({ type: 'voice_mode', mode: mode === 'online' ? 'offline' : 'online' })
+    }
+    window.addEventListener('keydown', down)
+    return () => window.removeEventListener('keydown', down)
+  }, [can, mode, send])
+  if (!mode) return null
+  return (
+    <div className="ff-voice" onClick={(e) => e.stopPropagation()} title="Act 2 voices (V)">
+      <span className="ff-voice-label">Voices</span>
+      <button
+        className={mode === 'online' ? 'on' : ''}
+        disabled={!can}
+        onClick={() => send({ type: 'voice_mode', mode: 'online' })}
+      >
+        Online · Gemini
+      </button>
+      <button className={mode !== 'online' ? 'on' : ''} disabled={!can} onClick={() => send({ type: 'voice_mode', mode: 'offline' })}>
+        {mode === 'unavailable' ? 'Offline (no API key)' : 'Offline'}
+      </button>
+    </div>
+  )
+}
+
 /** Speaks guidance with a local (offline) voice through the shared headset queue; danger lines interrupt.
- *  One beep per alarm. */
-function useVoiceAndAlarm(g: GuidanceMsg | null) {
+ *  In online mode the HUD lines arrive as Gemini-voiced callouts instead. One beep per alarm. */
+function useVoiceAndAlarm(g: GuidanceMsg | null, mode: VoiceMode) {
   const audio = useRef<AudioContext | null>(null)
   const lastAlarm = useRef(false)
   useEffect(() => {
     if (!g) return
-    if (g.say) headset.push({ text: g.say, speaker: null, severity: g.severity })
+    if (g.say && mode !== 'online') {
+      const line = { text: g.say, speaker: null, severity: g.severity }
+      if (g.say.startsWith('Survivor reached')) headset.finish(line) // last word: clear the queue, then silence
+      else headset.push(line)
+    }
     if (g.alarm && !lastAlarm.current) {
       try {
         audio.current ??= new AudioContext()
@@ -132,7 +180,7 @@ function useVoiceAndAlarm(g: GuidanceMsg | null) {
       }
     }
     lastAlarm.current = g.alarm
-  }, [g])
+  }, [g]) // eslint-disable-line react-hooks/exhaustive-deps -- mode is read, a switch must not re-speak
 }
 
 export function FirefighterView({ send }: { send: (m: ClientMsg) => void }) {
@@ -143,8 +191,9 @@ export function FirefighterView({ send }: { send: (m: ClientMsg) => void }) {
   const g = useSim((s) => s.guidance)
   const ffKnown = useSim((s) => !!s.state?.ff)
   const callout = useSim((s) => s.callout)
-  useVoiceAndAlarm(g)
-  useDroneVoices(callout)
+  const voiceMode = useSim((s) => s.state?.voice ?? null)
+  useVoiceAndAlarm(g, voiceMode)
+  useDroneVoices(callout, voiceMode)
 
   // input: pointer lock + mouse look, WASD + arrows (only while this view is on screen)
   useEffect(() => {
@@ -226,6 +275,7 @@ export function FirefighterView({ send }: { send: (m: ClientMsg) => void }) {
         </div>
       )}
       <CalloutBubble c={callout} />
+      <VoiceSwitch mode={voiceMode} send={send} />
       <div className="ff-subtitle">{g?.subtitle ? noEmDash(g.subtitle) : ffKnown ? 'Waiting for guidance' : 'Waiting for the firefighter'}</div>
       {!locked && <div className="ff-hint">Click to look around · WASD to walk · arrows to turn · Esc to release</div>}
     </div>

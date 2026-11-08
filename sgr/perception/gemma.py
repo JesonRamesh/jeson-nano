@@ -93,6 +93,7 @@ class GemmaClient:
             "model": self.model_tag,
             "stream": False,
             "keep_alive": -1,
+            "think": False,  # gemma4 thinks by default: ~645 tokens / ~7.8 s per frame vs ~35 / ~2.4 s without
             "format": SCHEMA,
             "options": {"temperature": 0, "num_ctx": 2048},
             "messages": [{"role": "user", "content": PROMPT, "images": [png_b64(frame)]}],

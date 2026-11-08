@@ -96,7 +96,7 @@ EXAMPLES: dict[type[BaseModel], BaseModel] = {
     c.StateMsg: c.StateMsg(
         t=10, speed=2.5, act=2, phase="act2", drones=[DRONE], ff=c.FFState(x=2, y=3, yaw=0), route=ROUTE,
         old_routes=[c.OldRoute(points=[(2, 3)], until=5)], checkpoints=[c.Checkpoint(x=8, y=10)],
-        survivor=SURV, click_handles=[HANDLE],
+        survivor=SURV, click_handles=[HANDLE], voice="online",
     ),
     c.MapDeltaMsg: c.MapDeltaMsg(cells=[(70, 15, "blocked_new"), (1, 2, "fire")], searched=[(3, 4)], map_full="iVBORw0="),
     c.TraceMsg: c.TraceMsg(**ROW),
@@ -114,6 +114,7 @@ EXAMPLES: dict[type[BaseModel], BaseModel] = {
     c.Act2StartMsg: c.Act2StartMsg(),
     c.SnapshotMsg: c.SnapshotMsg(op="save", name="act2_start"),
     c.FFInputMsg: c.FFInputMsg(fwd=1.0, strafe=-0.5, yaw=1.57),
+    c.VoiceModeMsg: c.VoiceModeMsg(mode="offline"),
     c.FailDroneMsg: c.FailDroneMsg(drone="D2"),
     # swarm
     c.SwarmDrone: c.SwarmDrone(id="D1", status="EXPLORING", task="area n4"),
@@ -129,7 +130,7 @@ EXAMPLES: dict[type[BaseModel], BaseModel] = {
 }
 
 SERVER_TYPES = [c.HelloMsg, c.StateMsg, c.MapDeltaMsg, c.TraceMsg, c.DetectionMsg, c.EventMsg, c.GuidanceMsg, c.BudgetMsg, c.SummaryMsg, c.CalloutMsg]
-CLIENT_TYPES = [c.ClickMsg, c.UndoMsg, c.ControlMsg, c.Act2StartMsg, c.SnapshotMsg, c.FFInputMsg]
+CLIENT_TYPES = [c.ClickMsg, c.UndoMsg, c.ControlMsg, c.Act2StartMsg, c.SnapshotMsg, c.FFInputMsg, c.VoiceModeMsg, c.FailDroneMsg]
 
 
 def _contract_models() -> set[type[BaseModel]]:
@@ -141,7 +142,7 @@ def _contract_models() -> set[type[BaseModel]]:
 
 
 def test_contract_version() -> None:
-    assert c.CONTRACT_VERSION == 4
+    assert c.CONTRACT_VERSION == 5
 
 
 def test_every_model_has_an_example() -> None:

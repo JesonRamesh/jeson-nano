@@ -48,6 +48,7 @@ from sgr.contracts import (
     TraceRow,
     UndoMsg,
     VelCmd,
+    VoiceModeMsg,
 )
 
 GUIDANCE_HOT_C = 60.0  # at/above this the swarm (not Guidance) moves the drone: it never enters > 70 °C
@@ -382,7 +383,9 @@ class SimLoop:
         if self.render and self.bus is not None:
             import cv2
 
-            ok, jpg = cv2.imencode(".jpg", frame[:, :, ::-1], [cv2.IMWRITE_JPEG_QUALITY, 70])
+            # the dashboard's copy gets smoke fog like the firefighter view; perception got the clean frame above
+            ui = self.world.dashboard_frame(drone, frame) if hasattr(self.world, "dashboard_frame") else frame
+            ok, jpg = cv2.imencode(".jpg", ui[:, :, ::-1], [cv2.IMWRITE_JPEG_QUALITY, 70])
             if ok:
                 channel = self.scenario.drones.ids.index(drone) + 1
                 self.bus.publish_frame(drone, channel, self._frame_seq, frame_id, jpg.tobytes())
@@ -418,6 +421,10 @@ class SimLoop:
                 self.world.remove(self.click_stack.pop())
             elif isinstance(msg, FFInputMsg):
                 self.world.set_ff_input(msg.fwd, msg.strafe, msg.yaw)
+            elif isinstance(msg, VoiceModeMsg):  # Act 2 switch: online (Gemini) / offline (local) voices
+                if hasattr(self.guidance, "set_voice_mode"):
+                    self.guidance.set_voice_mode(msg.mode)
+                    print(f"sgr: Act 2 voices {getattr(self.guidance, 'voice_mode', msg.mode)}")
             elif isinstance(msg, ControlMsg):
                 if msg.action == "pause":
                     self.paused = True
@@ -538,6 +545,7 @@ class SimLoop:
             checkpoints=ss.checkpoints if ss else [],
             survivor=ss.survivor if ss else None,
             click_handles=list(self.click_stack),
+            voice=getattr(self.guidance, "voice_mode", None),
         )
 
     def _publish(self, msg: Any) -> None:
