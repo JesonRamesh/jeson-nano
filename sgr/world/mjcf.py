@@ -113,12 +113,15 @@ def _drone_actuators(name: str) -> str:
 
 def _firefighter() -> str:
     r = FF_RADIUS
+    # condim="1" + priority="1": frictionless contacts (priority makes the FF's condim win over the walls').
+    # With friction, walking into a wall pressed the capsule so hard that wall friction out-torqued the yaw
+    # actuator: the FF could neither turn away nor walk (stuck for good).
     return f"""<body name="FF">
 <joint name="FF_x" type="slide" axis="1 0 0"/>
 <joint name="FF_y" type="slide" axis="0 1 0"/>
 <joint name="FF_yaw" type="hinge" axis="0 0 1"/>
 <geom name="FF_body" type="capsule" fromto="0 0 {r} 0 0 {FF_HEIGHT - r}" size="{r}" mass="{FF_MASS}"
-      rgba="{shapes.rgba(FF_RGBA)}" group="2" contype="2" conaffinity="1"/>
+      rgba="{shapes.rgba(FF_RGBA)}" group="2" contype="2" conaffinity="1" condim="1" priority="1"/>
 </body>"""
 
 
