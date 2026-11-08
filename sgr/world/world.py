@@ -201,6 +201,7 @@ class World:
 
         self._renderer: mujoco.Renderer | None = None
         self._ff_opt: mujoco.MjvOption | None = None  # renders only the firefighter figure (dashboard overlay)
+        self._ui_depth: tuple[str, float, np.ndarray] | None = None  # (drone, time, depth) of the last frame
         self._ff_figure = bool(shapes.ff_model_parts())
         self._ff_active = False
         self._scene_opt: mujoco.MjvOption | None = None
@@ -380,11 +381,13 @@ class World:
         r.update_scene(self.data, camera=self._d[drone]["cam"], scene_option=self._scene_opt)
         r.scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = 0
         r.scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 0
-        if self._firefx is None:
-            return r.render().copy(), info
-        fires = [(p.handle.x, p.handle.y, p.size) for p in self._placed.values() if p.handle.kind == "fire"]
+        self._ui_depth = None
+        fires = ([(p.handle.x, p.handle.y, p.size) for p in self._placed.values() if p.handle.kind == "fire"]
+                 if self._firefx is not None else [])
         if not fires:
-            return r.render().copy(), info
+            frame, depth = _render_rgb_depth(r, self.model)  # depth from the same draw: the dashboard reuses it
+            self._ui_depth = (drone, float(self.data.time), depth)
+            return frame, info
         m, g = self.model, self._fire_all
         alpha = m.geom_rgba[g, 3].copy()
         m.geom_rgba[g, 3] = 0.0  # hide the geom fire for this render only (the compositor draws it)
@@ -396,6 +399,11 @@ class World:
         cid = self._d[drone]["cam"]
         frame = self._firefx.apply(frame, depth, self.data.cam_xpos[cid], self.data.cam_xmat[cid], fires,
                                    float(self.data.time))
+        fd, cov = self._firefx.flame_depth, self._firefx.flame_cover
+        if fd is not None:  # flames are fogged by their own distance, not the wall behind them; blended by how
+            w = np.clip(cov * 2.0, 0.0, 1.0)  # much flame covers the pixel, so there is no edge or halo
+            depth = np.where(np.isfinite(fd), w * np.minimum(fd, depth) + (1 - w) * depth, depth)
+        self._ui_depth = (drone, float(self.data.time), depth)
         return frame, info
 
     def dashboard_frame(self, drone: str, frame: np.ndarray) -> np.ndarray:
@@ -406,7 +414,9 @@ class World:
         show_ff = self._ff_figure_in_view(drone)
         if fog.UI_FOG_DENSITY <= 0 and not show_ff:
             return frame
-        depth = self.render_depth(drone)
+        ui = self._ui_depth  # the depth render_drone already drew for this frame (no second render)
+        fresh = ui is not None and ui[0] == drone and ui[1] == float(self.data.time)
+        depth = ui[2] if fresh else self.render_depth(drone)
         if depth is None:
             return frame
         if show_ff:

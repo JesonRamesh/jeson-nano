@@ -73,6 +73,9 @@ GLOW = ((0, 1.0), (0.2, 0.6), (0.5, 0.18), (1, 0.0))
 
 
 class FireCompositor:
+    flame_depth: np.ndarray | None = None  # after apply(): nearest flame depth per pixel (inf = no flame)
+    flame_cover: np.ndarray | None = None  # after apply(): summed flame sprite weight per pixel (0 = none)
+
     def __init__(self, w: int = shapes.CAM_W, h: int = shapes.CAM_H) -> None:
         self.w, self.h = w, h
         self.fx, self.fy, self.cx, self.cy = shapes.cam_intrinsics(w, h)
@@ -109,8 +112,11 @@ class FireCompositor:
             seed = _js_round(x * 131 + y * 71)
             f = 0.72 + 0.18 * math.sin(t * 11 + seed) * math.sin(t * 6.7) + 0.1 * math.sin(t * 23)
             todo.append((x, y, s, seed, f))
+        self.flame_depth = self.flame_cover = None
         if not todo:
             return frame
+        self.flame_depth = np.full(depth.shape, np.inf, np.float32)
+        self.flame_cover = np.zeros(depth.shape, np.float32)
         img = frame.astype(np.float32) / 255.0
         self._floor(img, depth, pos, rot, todo)
         self._smoke(img, depth, pos, rot, todo, t)
@@ -177,12 +183,18 @@ class FireCompositor:
             return None
         return np.concatenate(out_f), np.concatenate(out_a), np.concatenate(out_i)
 
-    def _add(self, img, depth, u, v, z, rad, rgb, alpha, profile, cap) -> None:
-        """Additive sprites (order-free): sum every sprite's colour into the image."""
+    def _add(self, img, depth, u, v, z, rad, rgb, alpha, profile, cap, zbuf=None, cover=None) -> None:
+        """Additive sprites (order-free): sum every sprite's colour into the image. zbuf / cover (flat,
+        optional): nearest sprite depth and summed sprite weight per pixel (the dashboard fog uses them)."""
         hit = self._splat(depth, u, v, z, rad, alpha, profile, cap)
         if hit is None:
             return
         f, a, i = hit
+        if zbuf is not None:
+            vis = a > 0.001
+            np.minimum.at(zbuf, f[vis], z[i[vis]].astype(np.float32))
+        if cover is not None:
+            cover += np.bincount(f, weights=a, minlength=depth.size).astype(np.float32)
         flat, n = img.reshape(-1, 3), depth.size
         for ch in range(3):
             flat[:, ch] += np.bincount(f, weights=rgb[i, ch] * a, minlength=n)
@@ -244,7 +256,8 @@ class FireCompositor:
         """Flames and sparks of every fire in one additive pass (sparks: softDot, flames: softDot^2)."""
         fl = [self._flame_sprites(pos, rot, x, y, s, seed, t) for x, y, s, seed, _ in todo]
         u, v, z, rad, rgb, al = (np.concatenate(k) for k in zip(*fl))
-        self._add(img, depth, u, v, z, rad, rgb, al, lambda d: _ramp(d, SOFTDOT) ** 2, FLAME_CAP_PX)
+        self._add(img, depth, u, v, z, rad, rgb, al, lambda d: _ramp(d, SOFTDOT) ** 2, FLAME_CAP_PX,
+                  zbuf=self.flame_depth.reshape(-1), cover=self.flame_cover.reshape(-1))
         sk = [self._spark_sprites(pos, rot, x, y, s, seed, t) for x, y, s, seed, _ in todo]
         u, v, z, rad, rgb, al = (np.concatenate(k) for k in zip(*sk))
         self._add(img, depth, u, v, z, rad, rgb, al, lambda d: _ramp(d, SOFTDOT), FLAME_CAP_PX)
