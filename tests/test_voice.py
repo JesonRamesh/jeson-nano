@@ -87,16 +87,29 @@ def test_quiet_while_the_hud_warns():
     assert _kinds(g) == []
 
 
-def test_survivor_close():
+def test_near_the_survivor_says_so_not_follow_me():
     g = Guidance(world=StubWorld({"D1": (20, 3), "D2": (16, 3)}))
     sv = SurvivorState(status="confirmed", x=16.0, y=15.0, conf=0.9)
-    said, t = [], 0.0
+    said, t, m = [], 0.0, None
     for x, y in [(2.0, 3.0)] * 2 + [(15.5, 3.0)] * 50 + [(16.0, 9.0)] * 50:  # 6 m from the survivor
-        g.tick(t, Pose(x=x, y=y, yaw=1.57), _swarm(t=t, survivor=sv))
+        m, _ = g.tick(t, Pose(x=x, y=y, yaw=1.57), _swarm(t=t, survivor=sv))
         said += _kinds(g)
         t += 0.1
-    assert [s[1] for s in said] == ["intro", "handover", "survivor_close"]  # the walk passes D2's post
-    assert said[-1] == ("D2", "survivor_close", "Survivor just ahead, 6 metres.")
+    assert m.subtitle == "Survivor ahead. 6 metres."  # the HUD, instead of "Follow me." / "Follow the drone."
+    assert [s[1] for s in said] == ["intro", "handover"]  # no extra drone line repeating it
+
+
+def test_handover_to_the_survivor_drone_is_not_follow_me():
+    sv = SurvivorState(status="confirmed", x=16.0, y=15.0, conf=0.9)
+    sw = lambda t: SwarmState(  # noqa: E731
+        t=t, route=Route(points=ROUTE, status="ok", version=1), lead="D1", chain_formed=True, survivor=sv,
+        checkpoints=[Checkpoint(x=16.0, y=15.0, drone="D3")])  # 2 drones left: lead + survivor drone
+    g = Guidance(world=StubWorld({"D1": (17.0, 9.0), "D3": (16.0, 13.0)}))
+    g.tick(0.0, Pose(x=16.0, y=7.0, yaw=1.57), sw(0.0))
+    g.lead = "D1"
+    _kinds(g)
+    g.tick(0.1, Pose(x=16.0, y=11.5, yaw=1.57), sw(0.1))  # within 2 m of D3 -> D3 leads
+    assert ("D3", "handover", "D3 here, I'm with the survivor. Nearly there.") in _kinds(g)
 
 
 def test_progress_every_20_m_and_halfway():
@@ -349,3 +362,16 @@ def test_cached_lines_play_instantly_and_uncached_hud_warnings_dont_wait():
         time.sleep(0.01)
     assert ("HUD", "Wrong way. Turn around.") in agent._cache  # ... and voiced for next time
     agent.close()
+
+
+def test_one_warning_per_fire_even_if_it_spans_cells():
+    g = Guidance(world=StubWorld({"D1": (7, 3), "D2": (16, 3)}))
+    g.tick(0.0, Pose(x=4.0, y=3.0, yaw=0.0), _swarm())
+    _kinds(g)
+    fire = [(i, j, "fire") for i in range(35, 41) for j in range(0, 4)]  # a 1.2 x 0.8 m fire south of the route
+    out = []
+    for k in range(1, 400):
+        x = 4.0 + k * 0.02  # walking past it slowly
+        g.tick(k * 0.1, Pose(x=x, y=3.0, yaw=0.0), _swarm(t=k * 0.1, delta=fire if k == 1 else ()))
+        out += _kinds(g)
+    assert len([o for o in out if o[1] == "fire_side"]) == 1
