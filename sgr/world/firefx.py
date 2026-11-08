@@ -87,6 +87,11 @@ class FireCompositor:
             _seeds(_js_round(FLAME_N * s), seed, *FLAME_SPEED)
             _seeds(_js_round(SMOKE_N * s), seed + 1, *SMOKE_SPEED)
             _seeds(_js_round(SPARK_N * s), seed + 2, *SPARK_SPEED)
+        if fires:  # one synthetic pass: first calls into cv2 / numpy happen now, not on the first fire frame
+            x, y, size = fires[0]
+            cam = np.array([[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])  # 3 m west of it, facing east
+            self.apply(np.zeros((self.h, self.w, 3), np.uint8), np.full((self.h, self.w), 30.0, np.float32),
+                       (x - 3.0, y, 1.6), cam, [(x, y, size)], 0.0)
 
     # ------------------------------------------------------------------ public
     def apply(self, frame: np.ndarray, depth: np.ndarray, cam_pos, cam_mat, fires, t: float) -> np.ndarray:
