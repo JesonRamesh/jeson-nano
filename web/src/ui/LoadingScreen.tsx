@@ -2,6 +2,7 @@ import '@fontsource/montserrat/900.css' // ResQ wordmark (Montserrat Black, bund
 import { useProgress } from '@react-three/drei'
 import { useEffect, useState } from 'react'
 import type { ClientMsg } from '../contracts'
+import { toggleFullscreen } from './fullscreen'
 import { IntroScene } from '../scene3d/IntroScene'
 import { sim, useSim } from '../state/store'
 
@@ -256,9 +257,4 @@ export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
     </div>
     </>
   )
-}
-
-function toggleFullscreen() {
-  if (document.fullscreenElement) void document.exitFullscreen()
-  else void document.documentElement.requestFullscreen()
 }

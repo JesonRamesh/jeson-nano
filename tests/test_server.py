@@ -127,3 +127,28 @@ def test_late_browser_gets_trace_so_far(setup) -> None:
         assert parse_server_message(ws.receive_text()).type == "hello"
         got = [parse_server_message(ws.receive_text()).id for _ in range(3)]
         assert got == ["r0", "r1", "r2"]
+
+
+def test_late_browser_gets_latest_state_even_when_paused(setup, map_dir: Path) -> None:
+    """A paused sim publishes nothing (the Start screen holds it): a browser that connects then must still
+    get the latest state, or it waits on 'Starting the sim'. A new run's hello drops the old state."""
+    client, bus, hub, scenario = setup
+    drone = DroneState(id="D1", x=1, y=2, z=1.6, yaw=0, status="IDLE", task="", temp=20, lidar=[6.0] * 36, alive=True)
+    for t in (0.5, 0.6):  # only the latest is kept
+        bus.publish(StateMsg(t=t, speed=1.0, drones=[drone]))
+    for _ in range(100):
+        if hub.state_text and '"t":0.6' in hub.state_text:
+            break
+        time.sleep(0.02)
+    assert hub.state_text and '"t":0.6' in hub.state_text  # fail fast instead of blocking on receive below
+    with client.websocket_connect("/ws") as ws:  # nothing new is published: the sim is "paused"
+        assert parse_server_message(ws.receive_text()).type == "hello"
+        msg = parse_server_message(ws.receive_text())
+        assert msg.type == "state" and msg.t == 0.6
+
+    bus.publish(build_hello(map_dir, scenario))  # snapshot load / restart: the old run's state is stale
+    for _ in range(100):
+        if hub.state_text is None:
+            break
+        time.sleep(0.02)
+    assert hub.state_text is None
