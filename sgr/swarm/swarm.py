@@ -29,7 +29,7 @@ from sgr.contracts import (
     VelCmd,
 )
 
-from .agent import Agent
+from .agent import Agent, goal_mask
 from .areas import Area, assign, release, split_areas
 from .belief import FREE, UNSAFE, BeliefGrid
 from .blackboard import Blackboard
@@ -40,6 +40,9 @@ from .planner import DistanceField, cost_map, path_hits, path_length, snap
 from .trace import Trace
 
 EXCLUDE_RETRY_S = 30.0  # a drone retries areas it gave up on after this
+ASSIGN_RETRY_S = 1.0  # idle drones with nothing they can reach: look for work again this often
+REVISIT_LOOK_S = 8.0  # a revisiting drone watches the spot this long (a new sighting starts a normal inspection)
+REVISIT_GIVE_UP_S = 45.0  # couldn't get to a viewpoint in this long: try again later
 DEAD_END_TTL_S = 45.0  # a "couldn't see it" dead-end mark is retried after this
 SAME_BLOCKAGE_S = 10.0  # ... and seen within this long (otherwise it is a new blockage, e.g. a judge's click)
 SAME_BLOCKAGE_M = 2.5  # new blocked cells this close to a reported blockage extend it (one trace row each)
@@ -61,6 +64,12 @@ class Swarm:
         self._excluded_version = self.belief.open_version
         self._excluded_t = 0.0
         self._path_replans: set[str] = set()  # blockages already reported as a REPLAN
+        self._idle_key: tuple[str, ...] | None = None  # idle drones the last fruitless assignment saw
+        self._assign_retry_t = 0.0
+        self._revisit_drone: str | None = None  # flying back to look at a ruled-out "person" spot
+        self._revisit_xy: tuple[float, float] = (0.0, 0.0)
+        self._revisit_t0 = 0.0
+        self._revisit_seen_t: float | None = None
         self.t = 0.0
 
     # ------------------------------------------------------------------ facade
@@ -89,6 +98,7 @@ class Swarm:
         self.hazards.fresh_fire.clear()
         phase = self.rescue.tick(t, self.agents, poses)
         self._assign(t, alive)
+        self._revisit(t, alive)
 
         cmds: dict[str, VelCmd] = {}
         for d, r in alive.items():
@@ -262,17 +272,75 @@ class Swarm:
                                                until=t + 6.0))
             self.bb.event("replan", drone=ag.id, xy=(cx, cy))
 
-    def _assign(self, t: float, alive: dict[str, Readings]) -> None:
-        idle = [d for d in alive if self.agents[d].area is None and not self.agents[d].stationed]
+    def _revisit(self, t: float, alive: dict[str, Readings]) -> None:
+        """Nothing reachable left to search and still no survivor: fly an idle drone back to look at a spot
+        where a "person" was ruled out (Gemma can be wrong from a bad angle). The perception layer reports it
+        again if the camera still sees it, and the normal inspection takes over from there."""
+        d = self._revisit_drone
+        if d is not None:
+            ag = self.agents[d]
+            handed_over = any(ins.drone == d for ins in self.hazards.active.values())
+            if d not in alive or handed_over or self.bb.survivor.status == "confirmed" or ag.stationed:
+                if d in alive and not handed_over and not ag.stationed:
+                    ag.release()
+                self._revisit_drone = None
+                return
+            if ag.in_position and self._revisit_seen_t is None:
+                self._revisit_seen_t = t
+            looked = self._revisit_seen_t is not None and t - self._revisit_seen_t > REVISIT_LOOK_S
+            if looked or t - self._revisit_t0 > REVISIT_GIVE_UP_S:
+                ag.release()
+                self._revisit_drone = None
+            return
+        if self.bb.survivor.status == "confirmed" or self.hazards.active:
+            return
+        idle = [x for x in alive if self.agents[x].area is None and not self.agents[x].stationed
+                and self.agents[x].mode == "IDLE"]
         if not idle:
             return
+        spot = self.hazards.revisit_due(t)
+        if spot is None:
+            return
+        x, y, since = spot
+        d = min(idle, key=lambda q: math.hypot(alive[q].pose.x - x, alive[q].pose.y - y))
+        view = self.hazards.viewpoint((x, y), alive[d].pose)
+        if view is None:
+            return
+        self.agents[d].approach(view, (x, y))
+        self.hazards.mark_revisited((x, y), t)
+        self._revisit_drone, self._revisit_xy, self._revisit_t0, self._revisit_seen_t = d, (x, y), t, None
+        self.trace.log(t, d, "INSPECT",
+                       f"{d}: nothing reachable left to search and no survivor yet: going back to look at "
+                       f"({x:.1f}, {y:.1f}), where a person was ruled out at {since:.0f} s",
+                       Evidence(sensor="planner", value={"spot": [round(x, 1), round(y, 1)],
+                                                         "ruled_out_t": round(since, 1),
+                                                         "viewpoint": [round(view[0], 1), round(view[1], 1)]}))
+
+    def _assign(self, t: float, alive: dict[str, Readings]) -> None:
+        idle = [d for d in alive if self.agents[d].area is None and not self.agents[d].stationed
+                and d != self._revisit_drone]
+        if not idle:
+            return
+        # nothing could be handed out last time: try again when someone new is idle, else once a second
+        key = tuple(sorted(idle))
+        if key == self._idle_key and t < self._assign_retry_t:
+            return
+        self._idle_key, self._assign_retry_t = key, t + ASSIGN_RETRY_S
         cm = cost_map(self.belief)
         fields = {d: DistanceField(self.belief, (alive[d].pose.x, alive[d].pose.y)) for d in idle}
         centre_cell: dict[str, tuple[int, int] | None] = {
             a.id: snap(self.belief, cm, *a.centre) for a in self.areas.values()
         }
 
+        goals: dict[str, np.ndarray] = {}
+
         def dist(d: str, a: Area) -> float:
+            # only areas this drone can actually see into: a drone-sized way to a viewpoint (else it is offered,
+            # finds nothing to fly to, gives it up and gets it offered again: a livelock)
+            if a.id not in goals:
+                goals[a.id] = goal_mask(self.belief, a)
+            if not np.isfinite(np.where(goals[a.id], fields[d].cost, np.inf)).any():
+                return math.inf
             c = centre_cell[a.id]
             if c is not None and np.isfinite(fields[d].cost[c[1], c[0]]):
                 return float(fields[d].cost[c[1], c[0]]) * self.belief.res
@@ -282,6 +350,8 @@ class Swarm:
         helping = {ag.area for d, ag in self.agents.items()
                    if ag.area and d not in self.bb.lost and self.bb.claims.get(ag.area) != d}
         got = assign(idle, self.areas, self.bb.claims, self.belief, dist, self._excluded, helping)
+        if got:
+            self._idle_key = None  # the idle set changes now: the next idle drone is served at once
         for d, (aid, dd, frac) in got.items():
             self.agents[d].set_area(aid)
             shared = self.bb.claims.get(aid) != d
