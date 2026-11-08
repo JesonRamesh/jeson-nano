@@ -27,7 +27,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=8000, help="dashboard port")
     p.add_argument("--snapshots", type=Path, default=Path("snapshots"),
                    help="where act1_start / act2_start / named snapshots are saved (§8.6)")
+    p.add_argument("--voice", choices=["auto", "gemini", "template", "off"], default="auto",
+                   help="Act 2 drone voices: gemini (needs an API key in .env), template (fixed lines, offline), "
+                        "off; auto = gemini if a key is found")
     return p
+
+
+def make_voice(mode: str):
+    """(VoiceAgent | None, callouts on?). The agent only rewords/voices lines; the loop never waits for it."""
+    if mode == "off":
+        return None, False
+    if mode == "template":
+        return None, True
+    from sgr.guidance.voice import VoiceAgent
+
+    agent = VoiceAgent.from_env()
+    if agent is None:
+        print("sgr: no Google API key (GOOGLE_API_KEY or google_api in .env): drone voices use fixed lines")
+        if mode == "gemini":
+            print("sgr: WARNING --voice gemini requested but no key found")
+    else:
+        print(f"sgr: drone voices: Gemini ({agent.text_model} + {agent.tts_model})")
+    return agent, True
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,12 +69,13 @@ def main(argv: list[str] | None = None) -> int:
         from sgr.server.server import start_server
 
         start_server(bus, args.map, scenario, args.host, args.port)  # daemon thread (§3)
+    voice, callouts = make_voice(args.voice)
     loop = SimLoop(
         world,
         perception,
         swarm,
         scenario,
-        guidance=Guidance(prior=prior, world=world),  # world: drone_pose + push_ff_back only (§9)
+        guidance=Guidance(prior=prior, world=world, voice=voice, callouts=callouts),  # world: drone_pose + push_ff_back only (§9)
         bus=bus,
         budget=budget,
         speed=args.speed,
@@ -72,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         pass
     finally:
         budget.close()
+        if voice is not None:
+            voice.close()
     print(f"sgr: stopped at t={loop.t:.1f}s after {loop.ticks} ticks")
     return 0
 
