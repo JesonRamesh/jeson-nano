@@ -9,6 +9,8 @@ import { Banners } from './Banners'
 import { DronePanel, type DronePanelHandle } from './DronePanel'
 import { NetworkGraph } from './NetworkGraph'
 import { GeminiFlare } from '../ui/GeminiFlare'
+import { LoadingScreen } from '../ui/LoadingScreen'
+import '../ui/loading.css'
 import { TracePanel } from './TracePanel'
 import './dashboard.css'
 
@@ -271,6 +273,7 @@ export default function Dashboard() {
   return (
     <div className="dash">
       <Toasts />
+      <LoadingScreen />
       <Banners />
       {linkDown && <div className="link-pill">{status === 'connecting' ? 'Connecting to sim' : 'Sim link lost, reconnecting'}</div>}
       {versionMismatch && <div className="link-pill bad">Contract mismatch: server v{hello?.contract_version}</div>}

@@ -1,5 +1,6 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { DetectionMsg, DroneState } from '../contracts'
+import { GeminiFlare } from '../ui/GeminiFlare'
 import { GeminiSpark } from '../ui/GeminiSpark'
 import { noEmDash } from '../ui/text'
 
@@ -85,6 +86,8 @@ function LidarTopView({ lidar, colour }: { lidar: number[]; colour: string }) {
  * (id, status, task, temperature, frame #, LiDAR top view, detection + Gemma caption).
  * Frames bypass React (≈10 fps × 4): the parent calls showFrame() directly.
  */
+const ANSWER_GLOW_MS = 4000 // Gemini highlight after Gemma answers
+
 export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePanel(
   { id, colour, state, detection, tempLimit },
   ref,
@@ -124,6 +127,21 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
   const temp = state?.temp ?? 0
   const hot = temp > tempLimit
   const g = detection?.gemma
+  const thinking = alive && !!g?.pending
+  // "answering": Gemma's answer just landed. Keep the Gemini highlight on for a few seconds so it
+  // can be seen, then let the strip go quiet.
+  const [answeredFor, setAnsweredFor] = useState<DetectionMsg | null>(null)
+  useEffect(() => {
+    if (!detection || detection.gemma?.pending || !detection.gemma?.caption) return
+    const t0 = setTimeout(() => setAnsweredFor(detection), 0)
+    const t1 = setTimeout(() => setAnsweredFor((d) => (d === detection ? null : d)), ANSWER_GLOW_MS)
+    return () => {
+      clearTimeout(t0)
+      clearTimeout(t1)
+    }
+  }, [detection])
+  const answering = alive && !thinking && answeredFor !== null && answeredFor === detection
+  const gemLive = thinking || answering
   const status = alive ? (state?.status ?? 'no data').toLowerCase() : 'offline'
 
   return (
@@ -170,13 +188,14 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
             {alive ? `${temp.toFixed(0)}°C` : '--°C'}
           </span>
         </div>
+        <GeminiFlare active={gemLive} className="tile-flare" />
         <div className="feed-bottom">
-          <div className="feed-det">
+          <div className={`feed-det ${gemLive ? 'gem-live' : ''} ${thinking ? 'gem-thinking' : ''}`}>
             {detection ? (
               <>
+                <GeminiSpark active={thinking} size={22} title={thinking ? 'Gemma thinking' : 'Gemma'} />
                 <span className="det-tag">{detection.status.replace('_', ' ')}</span>
-                <GeminiSpark active={!!g?.pending} title={g?.pending ? 'Gemma thinking' : 'Gemma'} />
-                <span className={`det-caption ${g?.pending ? 'thinking' : ''}`}>
+                <span className={`det-caption ${thinking ? 'thinking' : ''}`}>
                   {g?.pending ? 'Gemma thinking…' : g?.caption ? noEmDash(g.caption) : 'no Gemma result'}
                   {g?.conf != null && !g.pending && <span className="det-conf">{g.conf.toFixed(2)}</span>}
                 </span>
