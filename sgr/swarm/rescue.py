@@ -325,6 +325,9 @@ class Rescue:
 
     # ------------------------------------------------------------------ chain
     def _chain(self, t: float, agents: dict[str, Agent], alive: dict[str, Pose], target: Pt) -> None:
+        if self.watcher is not None and self.watcher in alive:  # the survivor is found: the rescue path outranks
+            agents[self.watcher].unstation()  # watching a fire, so the watcher joins the chain
+            self.watcher, self._watch_done = None, True
         cands = sorted(d for d in alive if d != self.watcher)
         key = (self.bb.route.version, tuple(cands))
         if key == self._chain_key or not cands or not self.path:

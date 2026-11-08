@@ -205,7 +205,7 @@
     "altitude": 1.6
   },
   "flare": {
-    "t": 65.0,
+    "t": 35.0,
     "target": "D3"
   },
   "heat": {

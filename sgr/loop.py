@@ -54,6 +54,7 @@ GUIDANCE_COOL_C = 45.0  # ... and keeps it until it has cooled below this
 RESYNC_S = 5.0  # wall seconds between full belief-map resyncs (late-joining browsers catch up)
 FLARE_NEAR_M = 3.7  # flare-up hits the drone nearest a fire if this close: the watcher AT its post (3.3 m)
 FLARE_CORRIDOR_M = 2.3  # never flare a drone this close to a through-corridor (posts are >= 2.5 m; a drone holds within 0.4 m) ...
+SIGNAL_OFF_CORRIDOR_M = 2.0  # a signal-loss victim this far from the corridors counts as "out of the way"
 FLARE_CLEAR_M = 3.0  # no other drone this close to the flare-up victim
 FLARE_CORRIDOR_MAX_C = 140.0  # ... nor where the corridor would get this hot (drones may cross up to 150 °C)
 FLARE_FALLBACK_M = 6.0  # after the wait: the drone nearest a fire if this close, else no flare-up
@@ -93,6 +94,7 @@ class SimLoop:
         self.flare_fire: Handle | None = None
         self.flare_victim: str | None = None  # the drone that fails in Act 1 (flare-up, or signal loss)
         self.signal_lost: str | None = None  # set when it failed by signal loss instead of the flare-up
+        self._person_seen = False  # any detection of the survivor yet (triggers the failure if it's still due)
         self._frame_seq = 0
         self._cam_rr = 0
         self._last_state_pub = -math.inf
@@ -133,12 +135,14 @@ class SimLoop:
         # 1 inbound commands
         if self._drain_commands():
             return  # a snapshot was loaded: the next tick starts from the restored state
-        # 2 timed events: flare-up (§7.4)
-        if s.flare and not self._flared and self.t >= s.flare.t:
-            victim = self._flare_victim(waited=self.t - s.flare.t)
+        # 2 timed events: one drone fails during the exploration (§7.4), always BEFORE the survivor is found:
+        # at flare.t, or the moment any drone first glimpses the survivor, whichever comes first. A flare-up if
+        # a drone is somewhere safe for one, otherwise that drone loses its signal on the spot (no fire placed).
+        if s.flare and not self._flared and (self.t >= s.flare.t or self._person_seen):
+            victim = self._flare_victim(waited=FLARE_MAX_WAIT_S)  # decide now: no more waiting
             if victim == _WAIT:
                 victim = None
-            elif victim is not None:
+            if victim is not None:
                 p = w.drone_pose(victim)
                 # force: bypass the 1 m click clearance (the victim drone is AT this spot).
                 # Not pushed on click_stack, so Undo can't remove the flare-up fire.
@@ -155,7 +159,7 @@ class SimLoop:
                     self.flare_victim = victim
                     self.signal_lost = victim
                     print(f"sgr: {victim} lost its signal at t={self.t:.1f}s (no safe spot for a flare-up)")
-                self._flared = True
+            self._flared = True
         # 3 sensors (a dead drone publishes nothing = no heartbeat)
         alive = [d for d in s.drones.ids if d not in self.dead]
         readings = {
@@ -175,6 +179,8 @@ class SimLoop:
         detections = self.perception.poll()
         for det in detections:
             self._publish(_detection_msg(det))
+            if det.label == "person":
+                self._person_seen = True  # the drone failure must happen before the survivor is confirmed
         # 5 swarm
         ff = w.ff_pose() if self.act == 2 else None  # Act 2: the firefighter's tracker feeds the re-route
         cmds, rows, self.swarm_state = self.swarm.tick(self.t, readings, detections, ff=ff)
@@ -297,8 +303,15 @@ class SimLoop:
                 return 3
             return 2  # checkpoint / sentinel
 
-        target = self.scenario.flare.target if self.scenario.flare else None
-        return min(alive, key=lambda d: (rank(d), d != target, d))
+        gt = getattr(self.world, "ground_truth", None)
+        fires = [(f.x, f.y) for f in (gt().fires if gt else [])]
+
+        def near_fire(d: str) -> float:
+            p = self.world.drone_pose(d)
+            return min((math.hypot(p.x - fx, p.y - fy) for fx, fy in fires), default=0.0)
+
+        # among equals: off the main corridors first ("a little out of the way"), then the one nearest a fire
+        return min(alive, key=lambda d: (rank(d), self._corridor_dist(d) < SIGNAL_OFF_CORRIDOR_M, near_fire(d), d))
 
     def _flare_safe(self, drone: str, fires) -> bool:
         """A flare-up fire at this drone keeps every through-corridor open: far enough from them, and the summed
