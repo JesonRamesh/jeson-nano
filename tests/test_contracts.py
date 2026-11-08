@@ -105,6 +105,8 @@ EXAMPLES: dict[type[BaseModel], BaseModel] = {
     c.GuidanceMsg: c.GuidanceMsg(arrow_deg=-30, distance=4.2, subtitle="Bear left.", say="Bear left.", alarm=False, severity="warn"),
     c.BudgetMsg: c.BudgetMsg(network="offline", model_tag="gemma4:e4b", gemma_p50_s=1.1, gemma_p95_s=2.3, vram_used_mb=6600, vram_total_mb=8192, sim_rtf=1.0, speed=1.0, control_hz=10, camera_fps=10),
     c.SummaryMsg: c.SummaryMsg(time_s=95, distance_m=48.2, hazards_avoided=3, corrections=2, replans=2, trace_url="/api/trace"),
+    c.CalloutMsg: c.CalloutMsg(speaker="D2", kind="fire_side", text="Careful, fire on your right.", severity="warn",
+                               source="gemini", audio_b64="UklGRg==", audio_mime="audio/wav"),
     # client -> server
     c.ClickMsg: c.ClickMsg(mode="fire", x=14, y=17),
     c.UndoMsg: c.UndoMsg(),
@@ -125,7 +127,7 @@ EXAMPLES: dict[type[BaseModel], BaseModel] = {
     ),
 }
 
-SERVER_TYPES = [c.HelloMsg, c.StateMsg, c.MapDeltaMsg, c.TraceMsg, c.DetectionMsg, c.EventMsg, c.GuidanceMsg, c.BudgetMsg, c.SummaryMsg]
+SERVER_TYPES = [c.HelloMsg, c.StateMsg, c.MapDeltaMsg, c.TraceMsg, c.DetectionMsg, c.EventMsg, c.GuidanceMsg, c.BudgetMsg, c.SummaryMsg, c.CalloutMsg]
 CLIENT_TYPES = [c.ClickMsg, c.UndoMsg, c.ControlMsg, c.Act2StartMsg, c.SnapshotMsg, c.FFInputMsg]
 
 
@@ -138,7 +140,7 @@ def _contract_models() -> set[type[BaseModel]]:
 
 
 def test_contract_version() -> None:
-    assert c.CONTRACT_VERSION == 2
+    assert c.CONTRACT_VERSION == 3
 
 
 def test_every_model_has_an_example() -> None:

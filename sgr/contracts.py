@@ -21,8 +21,9 @@ from typing import Annotated, Any, Literal, Union
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator
 
-CONTRACT_VERSION = 2
+CONTRACT_VERSION = 3
 # v2: Scenario.checkpoints, Checkpoint.node (W's authored checkpoints), SwarmState.relook_requests (§8.4)
+# v3: CalloutMsg (Act 2 drone voices)
 
 
 class _Base(BaseModel):
@@ -487,6 +488,23 @@ class GuidanceMsg(_Base):
     severity: Severity = "info"
 
 
+class CalloutMsg(_Base):
+    """Act 2: one drone talks to the firefighter ("Careful, fire on your right."), spoken in that drone's voice.
+
+    Guidance decides what is said (facts from the swarm's beliefs only); the optional voice agent rewords it
+    (Gemini) and voices it (Gemini TTS). Danger lines never come here: GuidanceMsg.say stays instant.
+    """
+
+    type: Literal["callout"] = "callout"
+    speaker: str  # "D1".."D4"
+    kind: str  # intro | handover_out | handover_in | fire_side | survivor_close | progress | lead_wait
+    text: str  # what is said; also the subtitle
+    severity: Severity = "info"
+    source: Literal["gemini", "template"] = "template"  # who worded it
+    audio_b64: str | None = None  # base64 audio (Gemini TTS); None -> the browser speaks `text` itself
+    audio_mime: str | None = None  # e.g. "audio/wav"
+
+
 class BudgetMsg(_Base):
     type: Literal["budget"] = "budget"
     network: Literal["offline", "online", "unknown"] = "unknown"
@@ -523,6 +541,7 @@ ServerMessage = Annotated[
         GuidanceMsg,
         BudgetMsg,
         SummaryMsg,
+        CalloutMsg,
     ],
     Field(discriminator="type"),
 ]

@@ -190,6 +190,9 @@ class SimLoop:
                     elif d not in retreating:  # too hot to go on: hold at the edge of the heat (RETREAT wins > 70 °C)
                         cmds[d] = VelCmd(vz=c.vz)
                 self._publish(gmsg)
+                drain = getattr(self.guidance, "drain_callouts", None)  # drone voices (Gemini-worded when online)
+                for cm in drain() if drain else ():
+                    self._publish(cm)
             else:
                 self.guidance.observe(self.swarm_state)
             rows = rows + self.guidance.drain_trace()

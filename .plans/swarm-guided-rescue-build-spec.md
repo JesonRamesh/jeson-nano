@@ -465,7 +465,8 @@ A reference test script from the feasibility check is at `C:\Users\ashra\AppData
 | Walks into fire | Inside fire cell | Flash, `push_ff_back()`, warning (no fail state) |
 | Complete | Within 1.5 m of the survivor | MISSION_COMPLETE → summary |
 
-- **Voice:** browser `speechSynthesis`, one calm voice. Pick the first voice with `localService === true` and lang `en-GB`/`en-US` (Windows local voices are offline; avoid the "Google …" voices, which use the network). Danger messages call `cancel()` first. Subtitles always on. Alarm = WebAudio beep. **No Gemini voices.**
+- **Voice:** browser `speechSynthesis`, one calm voice. Pick the first voice with `localService === true` and lang `en-GB`/`en-US` (Windows local voices are offline; avoid the "Google …" voices, which use the network). Danger messages call `cancel()` first. Subtitles always on. Alarm = WebAudio beep. The HUD guidance voice stays local.
+- **Drone voices (team decision, Day 2):** the drones also talk to the firefighter (`CalloutMsg`, contract v3): intro, handovers, "fire on your right", survivor close, progress, lead waiting. Guidance decides when and the facts (swarm beliefs only); `sgr/guidance/voice.py` rewords the line with Gemini (`gemini-3.5-flash-lite`, ~0.5 s), fact-checks it (no invented directions, numbers, drones or hazards, else the fixed line) and voices it with Gemini TTS (`gemini-3.8-flash-lite-tts`, one voice per drone, ~2 s). Danger lines never go through Gemini. Offline or no key: fixed lines, local voices. `uv run sgr --voice auto|gemini|template|off`.
 - **Summary screen:** time, distance walked, hazards avoided, corrections given, number of re-plans, and a link to the full trace.
 
 ---

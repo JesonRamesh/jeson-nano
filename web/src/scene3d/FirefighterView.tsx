@@ -1,11 +1,14 @@
 import { Canvas, useFrame } from '@react-three/fiber'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
-import type { ClientMsg, GuidanceMsg } from '../contracts'
+import type { CalloutMsg, ClientMsg, GuidanceMsg } from '../contracts'
 import { sim, useSim } from '../state/store'
 import { noEmDash } from '../ui/text'
 import { Dressing } from './dressing'
 import { ClickObjects, Drones, Environment, Routes, SimFrame, SurvivorMarker } from './Scene3D'
+import { headset } from './voice'
+
+const CALLOUT_SHOW_MS = 5000 // how long a drone's line stays on screen
 
 // Act 2 firefighter view (spec §9): first person through the scan, smoke limiting sight to
 // about 4 m, drones glowing through it. MuJoCo owns the position (collisions); the browser
@@ -64,25 +67,52 @@ function Arrow({ deg }: { deg: number }) {
   )
 }
 
-/** Speaks guidance with a local (offline) voice; danger lines interrupt. One beep per alarm. */
+/** The drones' voices: each callout is spoken once (Gemini audio, or a local voice per drone). */
+function useDroneVoices(c: CalloutMsg | null) {
+  useEffect(() => {
+    if (!c) return
+    headset.push({
+      text: c.text,
+      speaker: c.speaker,
+      severity: c.severity,
+      audio: c.audio_b64 && c.audio_mime ? { b64: c.audio_b64, mime: c.audio_mime } : null,
+    })
+  }, [c])
+  useEffect(() => () => headset.stop(), []) // leaving the view: silence
+}
+
+/** The latest drone line, shown for a few seconds under the HUD arrow. */
+function CalloutBubble({ c }: { c: CalloutMsg | null }) {
+  const [shown, setShown] = useState<CalloutMsg | null>(null)
+  const colour = useSim((s) => s.hello?.drones.find((d) => d.id === c?.speaker)?.colour)
+  useEffect(() => {
+    if (!c) return
+    const show = setTimeout(() => setShown(c), 0)
+    const hide = setTimeout(() => setShown((cur) => (cur === c ? null : cur)), CALLOUT_SHOW_MS)
+    return () => {
+      clearTimeout(show)
+      clearTimeout(hide)
+    }
+  }, [c])
+  if (!shown) return null
+  return (
+    <div className={`ff-callout ff-callout-${shown.severity}`}>
+      <span className="ff-callout-who" style={colour ? { color: colour, borderColor: colour } : undefined}>
+        {shown.speaker}
+      </span>
+      {noEmDash(shown.text)}
+    </div>
+  )
+}
+
+/** Speaks guidance with a local (offline) voice through the shared headset queue; danger lines interrupt.
+ *  One beep per alarm. */
 function useVoiceAndAlarm(g: GuidanceMsg | null) {
   const audio = useRef<AudioContext | null>(null)
   const lastAlarm = useRef(false)
   useEffect(() => {
     if (!g) return
-    if (g.say && 'speechSynthesis' in window) {
-      const synth = window.speechSynthesis
-      const voices = synth.getVoices()
-      const voice =
-        voices.find((v) => v.localService && /en[-_]GB/i.test(v.lang)) ??
-        voices.find((v) => v.localService && /en[-_]US/i.test(v.lang)) ??
-        voices.find((v) => v.localService)
-      if (g.severity === 'danger') synth.cancel()
-      const u = new SpeechSynthesisUtterance(noEmDash(g.say))
-      if (voice) u.voice = voice // never a network voice: if none is local, the browser default
-      u.rate = 1.0
-      synth.speak(u)
-    }
+    if (g.say) headset.push({ text: g.say, speaker: null, severity: g.severity })
     if (g.alarm && !lastAlarm.current) {
       try {
         audio.current ??= new AudioContext()
@@ -112,7 +142,9 @@ export function FirefighterView({ send }: { send: (m: ClientMsg) => void }) {
   const [locked, setLocked] = useState(false)
   const g = useSim((s) => s.guidance)
   const ffKnown = useSim((s) => !!s.state?.ff)
+  const callout = useSim((s) => s.callout)
   useVoiceAndAlarm(g)
+  useDroneVoices(callout)
 
   // input: pointer lock + mouse look, WASD + arrows (only while this view is on screen)
   useEffect(() => {
@@ -193,6 +225,7 @@ export function FirefighterView({ send }: { send: (m: ClientMsg) => void }) {
           <span className="ff-dist">{g.distance.toFixed(0)} m</span>
         </div>
       )}
+      <CalloutBubble c={callout} />
       <div className="ff-subtitle">{g?.subtitle ? noEmDash(g.subtitle) : ffKnown ? 'Waiting for guidance' : 'Waiting for the firefighter'}</div>
       {!locked && <div className="ff-hint">Click to look around · WASD to walk · arrows to turn · Esc to release</div>}
     </div>
