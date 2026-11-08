@@ -27,15 +27,16 @@ HUD conventions (for D): arrow_deg = direction to go, relative to the FF heading
 CCW positive (+90 = turn left). distance = metres left along the route.
 `say` is set only when the message changes (speak it once). Subtitles are always set.
 
-Drone voices (callouts, voice.py): besides the HUD voice, the drones talk to the firefighter. Each is said
-once, at most one every CALLOUT_GAP_S, never while a danger / correction message is up:
-  intro          first guided tick                 lead: "I'm D1. I'll lead you to the survivor. Stay close behind me."
-  handover       the lead changes                  old lead: "Handing you over to D2...", new lead: "D2 here..."
-  fire_side      a believed fire 1.3-6 m away       nearest drone: "Careful, fire on your right, about 3 metres."
-  survivor_close confirmed survivor within 8 m      lead: "The survivor is close now, about 6 metres."
-  progress       halfway, and the last 15 m         lead: "Halfway there. About 30 metres to go."
-  lead_wait      the lead has waited 5 s            lead: "I'm waiting for you. Walk towards my light."
-  lead_return    the lead starts flying back         lead: "I'm coming back for you. Follow the arrow until I reach you."
+Drone voices (callouts, voice.py): besides the HUD voice, the drones talk to the firefighter. Short lines, each
+said once, at most one every CALLOUT_GAP_S (7 s; a handover may come sooner), never while a danger / correction
+message is up, and nothing after mission complete (lines still being voiced are dropped):
+  intro          first guided tick                 lead: "D1 here. Follow me to the survivor."
+  handover       the lead changes                  new lead: "D2 here, taking over from D1. Follow me."
+  fire_side      a believed fire 1.3-6 m away       nearest drone: "Fire on your right, 3 metres."
+  survivor_close confirmed survivor 4-8 m away      lead: "Survivor just ahead, 6 metres."
+  progress       halfway                           lead: "Halfway there. 30 metres to go."
+  lead_wait      the lead has waited 5 s            lead: "Waiting for you. Walk to my light."
+  lead_return    the lead starts flying back         lead: "Coming back for you. Follow the arrow."
 """
 
 from __future__ import annotations
@@ -69,10 +70,11 @@ EDGE_ON_ROUTE_M = 1.0
 BLOCKED_HOLD_S = 2.0
 NEW_ROUTE_HOLD_S = 4.0
 LEAD_GAIN = 1.2
-CALLOUT_GAP_S = 4.0  # at most one drone callout per 4 s (handovers excepted)
+CALLOUT_GAP_S = 7.0  # at most one drone callout per 7 s (a handover may come sooner): short, never a backlog
 FIRE_CALLOUT_M = 6.0
 FIRE_CALLOUT_AGAIN_S = 40.0
 SURVIVOR_CALLOUT_M = 8.0
+SURVIVOR_CALLOUT_MIN_M = 4.0  # closer than this, "Survivor reached" is about to play: say nothing
 LEAD_WAIT_CALLOUT_S = 5.0
 QUIET_KEYS = {"fire", "danger", "blocked", "noroute", "wrong", "complete"}  # the HUD voice has the floor
 
@@ -120,6 +122,7 @@ class Guidance:
         self._cl_wait_since: float | None = None
         self._cl_wait_said = False
         self._cl_return_said = False
+        self._cl_done = False
         self._callouts_out = []
         if self.voice is not None:
             self.voice.clear()
@@ -201,8 +204,7 @@ class Guidance:
 
     # ---------------------------------------------------------------- drone voices (callouts)
     def _say(self, c: Callout, t: float) -> None:
-        if c.kind not in ("handover_out", "handover_in"):
-            self._cl_last = t
+        self._cl_last = t
         if self.voice is not None:
             self.voice.submit(c)
         else:
@@ -217,14 +219,19 @@ class Guidance:
 
     def _callouts(self, t: float, ff: Pose, p: Pt, swarm: SwarmState, proj, key: str, remaining: float) -> None:
         lead = self.lead
-        if lead is None or not proj or self.complete:  # mission over: the drones go quiet
+        if self.complete:  # mission over: the drones go quiet, and lines still being voiced are dropped
+            if not self._cl_done:
+                self._cl_done = True
+                self._callouts_out = []
+                if self.voice is not None:
+                    self.voice.clear()
             return
-        # handover: the old lead hands over, the new one introduces itself
+        if lead is None or not proj:
+            return
+        # handover: one short line from the new lead (it breaks the gap: the FF must know who to follow)
         if self._cl_lead is not None and lead != self._cl_lead and key not in ("fire", "danger"):
-            old = self._cl_lead
-            self._say(Callout(old, "handover_out", f"Handing you over to {lead}. Follow their light.",
-                              {"from": old, "to": lead}), t)
-            self._say(Callout(lead, "handover_in", f"{lead} here. I've got you, follow me.", {"name": lead}), t)
+            self._say(Callout(lead, "handover", f"{lead} here, taking over from {self._cl_lead}. Follow me.",
+                              {"from": self._cl_lead, "to": lead}), t)
         self._cl_lead = lead
         if key == "follow":
             self._cl_wait_since = self._cl_wait_since if self._cl_wait_since is not None else t
@@ -232,7 +239,7 @@ class Guidance:
             self._cl_wait_since, self._cl_wait_said = None, False
         if key == "returning" and not self._cl_return_said and self._cl_intro:
             self._cl_return_said = True
-            self._say(Callout(lead, "lead_return", "I'm coming back for you. Follow the arrow until I reach you."), t)
+            self._say(Callout(lead, "lead_return", "Coming back for you. Follow the arrow."), t)
             return
         if key != "returning":
             self._cl_return_said = False
@@ -243,16 +250,16 @@ class Guidance:
             self._cl_total = remaining
             if key == "returning":  # e.g. the only drone left, still over the survivor
                 self._cl_return_said = True
-                text = f"I'm {lead}. I'm coming back for you. Follow the arrow until I reach you."
+                text = f"{lead} here. Coming back for you, follow the arrow."
             else:
-                text = f"I'm {lead}. I'll lead you to the survivor. Stay close behind me."
+                text = f"{lead} here. Follow me to the survivor."
             self._say(Callout(lead, "intro", text, {"name": lead}), t)
             return
         c = self._fire_callout(t, ff, p, swarm) or self._survivor_callout(p, swarm) or self._progress_callout(remaining)
         waited = self._cl_wait_since is not None and t - self._cl_wait_since >= LEAD_WAIT_CALLOUT_S
         if c is None and waited and not self._cl_wait_said:
             self._cl_wait_said = True
-            c = Callout(lead, "lead_wait", "I'm waiting for you. Walk towards my light.")
+            c = Callout(lead, "lead_wait", "Waiting for you. Walk to my light.")
         if c is not None:
             self._say(c, t)
 
@@ -279,8 +286,7 @@ class Guidance:
             return None  # behind: not worth a warning
         self._cl_fires[cluster] = t
         metres = max(1, round(dist))
-        text = (f"Careful, fire ahead, about {metres} metres. Stay with me." if side == "ahead"
-                else f"Careful, fire on your {side}, about {metres} metres.")
+        text = f"Fire ahead, {metres} metres. Stay with me." if side == "ahead" else f"Fire on your {side}, {metres} metres."
         return Callout(self._nearest_drone(swarm, f) or self.lead, "fire_side", text,
                        {"side": side, "distance_m": metres}, severity="warn")
 
@@ -298,24 +304,20 @@ class Guidance:
         if self._cl_survivor or not sv or sv.status != "confirmed" or sv.x is None or sv.y is None:
             return None
         d = math.dist(p, (sv.x, sv.y))
-        if not COMPLETE_M < d <= SURVIVOR_CALLOUT_M:
+        if not SURVIVOR_CALLOUT_MIN_M < d <= SURVIVOR_CALLOUT_M:
             return None
         self._cl_survivor = True
         m = max(2, round(d))
-        return Callout(self.lead, "survivor_close", f"The survivor is close now, about {m} metres. Keep going.",
-                       {"distance_m": m})
+        return Callout(self.lead, "survivor_close", f"Survivor just ahead, {m} metres.", {"distance_m": m})
 
     def _progress_callout(self, remaining: float) -> Callout | None:
         total = self._cl_total
         if not total or total < 20:
             return None
         n = round(remaining)
-        if "half" not in self._cl_marks and 15 < remaining <= total / 2:
+        if "half" not in self._cl_marks and 15 < remaining <= total / 2:  # the end is the survivor line's job
             self._cl_marks.add("half")
-            return Callout(self.lead, "progress", f"Halfway there. About {n} metres to go.", {"metres_left": n})
-        if "near" not in self._cl_marks and 8 < remaining <= 15:
-            self._cl_marks.update({"half", "near"})
-            return Callout(self.lead, "progress", f"Nearly there, about {n} metres left.", {"metres_left": n})
+            return Callout(self.lead, "progress", f"Halfway there. {n} metres to go.", {"metres_left": n})
         return None
 
     # ---------------------------------------------------------------- rules

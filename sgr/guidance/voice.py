@@ -36,7 +36,9 @@ TTS_MODEL = os.environ.get("SGR_VOICE_TTS_MODEL", "gemini-3.8-flash-lite-tts")  
 API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 TEXT_TIMEOUT_S = 2.0
 TTS_TIMEOUT_S = 4.0
-STALE_S = 4.0  # waited this long in the queue (Gemini slow / many lines): skip Gemini, say the fixed line now
+STALE_S = 3.0  # waited this long in the queue (Gemini slow / many lines): skip Gemini, say the fixed line now
+# only these get reworded by Gemini (+~0.5 s); urgent lines (fire, survivor, handover) go straight to the voice
+REWORD_KINDS = {"intro", "progress", "lead_wait", "lead_return"}
 QUEUE_MAX = 8
 
 # personality + Gemini TTS prebuilt voice per drone (distinct voices so the firefighter can tell them apart)
@@ -113,7 +115,7 @@ def check_line(line: str, c: Callout) -> str | None:
     """The reworded line if it says nothing the fixed line and facts don't; None -> use the fixed line."""
     line = " ".join(line.replace("*", "").replace('"', "").replace("“", "").replace("”", "").split()).strip()
     n = len(line.split())
-    if not 3 <= n <= 18:
+    if not 3 <= n <= 14:  # short: a long line delays the next one
         return None
     ref = f"{c.text} {json.dumps(c.facts)} {c.speaker}"
     if not set(_words(line)) & _DIRECTIONS <= set(_words(ref)) & _DIRECTIONS:
@@ -234,7 +236,7 @@ class VoiceAgent:
             return template_msg(c)
         t0 = time.perf_counter()
         text, source = c.text, "template"
-        line = self._reword(c)
+        line = self._reword(c) if c.kind in REWORD_KINDS else None
         if line is not None:
             ok = check_line(line, c)
             if ok:
@@ -268,7 +270,7 @@ class VoiceAgent:
         system = (
             f"You are {c.speaker}, one of four small rescue drones guiding a firefighter through a dark, "
             f"smoke-filled building to a trapped survivor. Personality: {persona}. You talk to the firefighter "
-            "over their headset. Reply with ONE short spoken line (5 to 14 words), plain text, no quotes, no emojis. "
+            "over their headset. Reply with ONE short spoken line (4 to 10 words), plain text, no quotes, no emojis. "
             "Say the same thing as the default line, in your own words. Use ONLY the facts given: never add "
             "directions, hazards, places, names or numbers that are not in the facts or the default line."
         )

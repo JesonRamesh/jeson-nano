@@ -69,8 +69,14 @@ function Arrow({ deg }: { deg: number }) {
 
 /** The drones' voices: each callout is spoken once (Gemini audio, or a local voice per drone). */
 function useDroneVoices(c: CalloutMsg | null) {
+  const hello = useSim((s) => s.hello)
+  const pushed = useRef<CalloutMsg | null>(null)
   useEffect(() => {
-    if (!c) return
+    headset.reset() // a new run (fresh hello after a snapshot load / reconnect): the headset opens again
+  }, [hello])
+  useEffect(() => {
+    if (!c || pushed.current === c) return // once per line (StrictMode runs effects twice)
+    pushed.current = c
     headset.push({
       text: c.text,
       speaker: c.speaker,
@@ -112,7 +118,11 @@ function useVoiceAndAlarm(g: GuidanceMsg | null) {
   const lastAlarm = useRef(false)
   useEffect(() => {
     if (!g) return
-    if (g.say) headset.push({ text: g.say, speaker: null, severity: g.severity })
+    if (g.say) {
+      const line = { text: g.say, speaker: null, severity: g.severity }
+      if (g.say.startsWith('Survivor reached')) headset.finish(line) // last word: clear the queue, then silence
+      else headset.push(line)
+    }
     if (g.alarm && !lastAlarm.current) {
       try {
         audio.current ??= new AudioContext()

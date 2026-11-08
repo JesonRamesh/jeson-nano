@@ -346,7 +346,7 @@ export interface GuidanceMsg {
 export interface CalloutMsg {
   type: 'callout'
   speaker: string // 'D1'..'D4'
-  kind: string // intro | handover_out | handover_in | fire_side | survivor_close | progress | lead_wait
+  kind: string // intro | handover | fire_side | survivor_close | progress | lead_wait | lead_return
   text: string // what is said; also the subtitle
   severity: Severity
   source: 'gemini' | 'template'

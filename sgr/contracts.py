@@ -497,7 +497,7 @@ class CalloutMsg(_Base):
 
     type: Literal["callout"] = "callout"
     speaker: str  # "D1".."D4"
-    kind: str  # intro | handover_out | handover_in | fire_side | survivor_close | progress | lead_wait
+    kind: str  # intro | handover | fire_side | survivor_close | progress | lead_wait | lead_return
     text: str  # what is said; also the subtitle
     severity: Severity = "info"
     source: Literal["gemini", "template"] = "template"  # who worded it
