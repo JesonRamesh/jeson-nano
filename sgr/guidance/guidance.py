@@ -19,6 +19,8 @@ Rules (§9), highest priority first:
                                                             -> "Wrong way. Turn around."
   drifting       > 2 m off the route for 2 s                -> "Bear left." / "Bear right."
   follow         lead stays 3 m ahead on the route; FF > 6 m behind -> lead stops, "Follow me."
+  returning      lead > 10 m ahead on the route (e.g. the only drone left, still over the survivor)
+                 -> it flies back along the route to meet the FF: "Your drone is coming back to you."
   handover       FF within 2 m of the next chain drone      -> that drone becomes the lead
 
 HUD conventions (for D): arrow_deg = direction to go, relative to the FF heading, degrees,
@@ -33,6 +35,7 @@ once, at most one every CALLOUT_GAP_S, never while a danger / correction message
   survivor_close confirmed survivor within 8 m      lead: "The survivor is close now, about 6 metres."
   progress       halfway, and the last 15 m         lead: "Halfway there. About 30 metres to go."
   lead_wait      the lead has waited 5 s            lead: "I'm waiting for you. Walk towards my light."
+  lead_return    the lead starts flying back         lead: "I'm coming back for you. Follow the arrow until I reach you."
 """
 
 from __future__ import annotations
@@ -53,6 +56,7 @@ ARROW_MIN_M = 0.6  # shortest arrow lookahead (tight corners, narrow gaps)
 ARROW_CHORD_TOL_M = 0.25  # the straight line to the arrow target may leave the route by at most this
 LEAD_CARROT_M = 1.0  # the lead drone steps along the route, never straight through walls
 FOLLOW_GAP_M = 6.0
+RETURN_GAP_M = 10.0  # a lead this far ahead along the route comes back to the firefighter instead of waiting
 HANDOVER_M = 2.0
 DRIFT_M = 2.0
 DRIFT_S = 2.0
@@ -102,6 +106,7 @@ class Guidance:
         self._trace_n = 0
         self._walked = 0.0
         self._last_ff: Pt | None = None
+        self._returning = False
         self._reset_callouts()
 
     def _reset_callouts(self) -> None:
@@ -114,6 +119,7 @@ class Guidance:
         self._cl_marks: set[str] = set()
         self._cl_wait_since: float | None = None
         self._cl_wait_said = False
+        self._cl_return_said = False
         self._callouts_out = []
         if self.voice is not None:
             self.voice.clear()
@@ -172,12 +178,12 @@ class Guidance:
         arrow = math.degrees(wrap(bearing(p, target) - ff.yaw)) if target else 0.0
 
         cmds: dict[str, VelCmd] = {}
-        lead_waits = False
+        lead_state = "none"
         if proj and not self.complete and self.world is not None:
             self._handover(swarm, route, proj, p)
-            lead_waits = self._lead_cmd(route, proj, p, cmds)  # the arrow keeps following the route
+            lead_state = self._lead_cmd(route, proj, p, cmds)  # the arrow keeps following the route
 
-        key, text, sev, alarm = self._rule(t, ff, p, swarm, route, proj, status, lead_waits)
+        key, text, sev, alarm = self._rule(t, ff, p, swarm, route, proj, status, lead_state)
         say = text if key != self._key else None
         if say is not None and key in ("drift", "wrong", "danger", "fire"):
             self.corrections += 1
@@ -224,13 +230,23 @@ class Guidance:
             self._cl_wait_since = self._cl_wait_since if self._cl_wait_since is not None else t
         else:
             self._cl_wait_since, self._cl_wait_said = None, False
+        if key == "returning" and not self._cl_return_said and self._cl_intro:
+            self._cl_return_said = True
+            self._say(Callout(lead, "lead_return", "I'm coming back for you. Follow the arrow until I reach you."), t)
+            return
+        if key != "returning":
+            self._cl_return_said = False
         if key in QUIET_KEYS or t - self._cl_last < CALLOUT_GAP_S:
             return
         if not self._cl_intro:
             self._cl_intro = True
             self._cl_total = remaining
-            self._say(Callout(lead, "intro", f"I'm {lead}. I'll lead you to the survivor. Stay close behind me.",
-                              {"name": lead}), t)
+            if key == "returning":  # e.g. the only drone left, still over the survivor
+                self._cl_return_said = True
+                text = f"I'm {lead}. I'm coming back for you. Follow the arrow until I reach you."
+            else:
+                text = f"I'm {lead}. I'll lead you to the survivor. Stay close behind me."
+            self._say(Callout(lead, "intro", text, {"name": lead}), t)
             return
         c = self._fire_callout(t, ff, p, swarm) or self._survivor_callout(p, swarm) or self._progress_callout(remaining)
         waited = self._cl_wait_since is not None and t - self._cl_wait_since >= LEAD_WAIT_CALLOUT_S
@@ -303,7 +319,7 @@ class Guidance:
         return None
 
     # ---------------------------------------------------------------- rules
-    def _rule(self, t, ff: Pose, p: Pt, swarm: SwarmState, route, proj, status, lead_waits):
+    def _rule(self, t, ff: Pose, p: Pt, swarm: SwarmState, route, proj, status, lead_state):
         sv = swarm.survivor
         if self.complete or (sv and sv.status == "confirmed" and sv.x is not None
                              and math.dist(p, (sv.x, sv.y)) <= COMPLETE_M):
@@ -339,7 +355,9 @@ class Guidance:
             # the route is on the opposite side of the FF's offset
             return ("drift", "Bear right." if proj.side > 0 else "Bear left.", "warn", False)
 
-        if lead_waits:
+        if lead_state == "return":
+            return "returning", "Your drone is coming back to you. Follow the arrow.", "info", False
+        if lead_state == "wait":
             return "follow", "Follow me.", "info", False
         return "go", f"Follow the drone. {max(0.0, sum(math.dist(a, b) for a, b in zip(route, route[1:])) - proj.s):.0f} metres to go.", "info", False
 
@@ -429,15 +447,22 @@ class Guidance:
             if q is not None and math.dist(p, q) <= HANDOVER_M:
                 self.lead = best[1]
 
-    def _lead_cmd(self, route, proj, p: Pt, cmds: dict[str, VelCmd]) -> bool:
-        """Drive the lead 3 m ahead on the route. Returns True if it is waiting for the FF."""
+    def _lead_cmd(self, route, proj, p: Pt, cmds: dict[str, VelCmd]) -> str:
+        """Drive the lead 3 m ahead on the route. Returns "lead", "wait" (the FF fell behind: the lead holds)
+        or "return" (the lead is far ahead, e.g. the only drone left still over the survivor: it flies back
+        along the route until it is in front of the firefighter again)."""
         if self.lead is None:
-            return False
+            return "none"
         q = self.world.drone_pose(self.lead)
         lead_s = project(route, (q.x, q.y)).s
-        if lead_s - proj.s > FOLLOW_GAP_M or math.dist(p, (q.x, q.y)) > FOLLOW_GAP_M + 1.0:
+        gap = lead_s - proj.s
+        if gap > RETURN_GAP_M:
+            self._returning = True
+        elif gap <= LEAD_AHEAD_M + 1.0:
+            self._returning = False  # back in front of the firefighter: lead as usual
+        if not self._returning and (gap > FOLLOW_GAP_M or math.dist(p, (q.x, q.y)) > FOLLOW_GAP_M + 1.0):
             cmds[self.lead] = VelCmd(vz=LEAD_GAIN * (self.altitude - q.z), wz=self._face(q, p))
-            return True
+            return "wait"
         # step along the route towards the goal (3 m ahead of the FF), never straight through walls
         goal_s = proj.s + LEAD_AHEAD_M
         step = max(-LEAD_CARROT_M, min(LEAD_CARROT_M, goal_s - lead_s))
@@ -447,7 +472,7 @@ class Guidance:
         if n > config.MAX_SPEED:
             vx, vy = vx * config.MAX_SPEED / n, vy * config.MAX_SPEED / n
         cmds[self.lead] = VelCmd(vx=vx, vy=vy, vz=LEAD_GAIN * (self.altitude - q.z), wz=self._face(q, p))
-        return False
+        return "return" if self._returning else "lead"
 
     @staticmethod
     def _face(q: Pose, p: Pt) -> float:
@@ -480,4 +505,5 @@ class Guidance:
         self.corrections, self._walked = s["corrections"], s["walked"]
         self._key = None
         self._last_ff = None
+        self._returning = False
         self._reset_callouts()  # a loaded snapshot starts a fresh conversation
