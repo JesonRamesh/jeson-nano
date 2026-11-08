@@ -1,3 +1,4 @@
+import '@fontsource/montserrat/900.css' // ResQ wordmark (Montserrat Black, bundled: works offline)
 import { useProgress } from '@react-three/drei'
 import { useEffect, useState } from 'react'
 import type { ClientMsg } from '../contracts'
@@ -81,8 +82,15 @@ export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
     const hello0 = sim.snap.hello
     const t0 = performance.now()
     send({ type: 'control', action: 'reset' })
+    let nudged = false
     const iv = setInterval(() => {
       const { hello: h, state: st } = sim.snap
+      // a sim already held at the Start screen (page refreshed there) stays paused after the reset: once the
+      // fresh run's hello is in, let it tick (commands sent with the reset are dropped by the snapshot load)
+      if (h !== hello0 && !nudged) {
+        nudged = true
+        send({ type: 'control', action: 'start' })
+      }
       const restarted = h !== hello0 && st !== null && st.t >= WARM_S
       if (restarted || performance.now() - t0 > ARM_TIMEOUT_MS) {
         clearInterval(iv)
@@ -92,6 +100,14 @@ export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
     }, 40)
     return () => clearInterval(iv)
   }, [phase, send])
+
+  // full screen from the Start screen (same as the dashboard's F key)
+  const [full, setFull] = useState(() => !!document.fullscreenElement)
+  useEffect(() => {
+    const sync = () => setFull(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', sync)
+    return () => document.removeEventListener('fullscreenchange', sync)
+  }, [])
 
   const go = () => {
     send({ type: 'control', action: 'start' })
@@ -159,8 +175,11 @@ export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
         <div className="intro-vignette" />
         {(armed || phase === 'restarting' || phase === 'leaving') && (
           <div className="intro-ui">
+            <h1 className="intro-brand" aria-label="ResQ">
+              Res<span className="intro-brand-q">Q</span>
+            </h1>
             <div className="intro-kicker">Swarm-Guided Rescue</div>
-            <div className="intro-title">{resume ? 'Mission paused' : 'Four drones go in first. You follow.'}</div>
+            <div className="intro-title">{resume ? 'Mission paused' : 'Drones go in first. You follow.'}</div>
             <div className="intro-actions">
               <button className="loading-start" onClick={go} autoFocus disabled={!armed}>
                 <span>{resume ? 'Resume mission' : 'Start mission'}</span>
@@ -173,6 +192,10 @@ export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
                 </button>
               )}
             </div>
+            <button className="loading-fullscreen" onClick={toggleFullscreen} title="Full screen (F)">
+              <span>{full ? 'Exit full screen' : 'Enter full screen'}</span>
+              <kbd>F</kbd>
+            </button>
           </div>
         )}
       </div>
@@ -233,4 +256,9 @@ export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
     </div>
     </>
   )
+}
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) void document.exitFullscreen()
+  else void document.documentElement.requestFullscreen()
 }

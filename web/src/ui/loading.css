@@ -147,6 +147,26 @@
   text-align: center;
   animation: intro-ui-in 0.9s 0.3s var(--ease) both;
 }
+/* ResQ wordmark: Montserrat Black; the Q wears the spark colours of the Start button's ring */
+.intro-brand {
+  margin: 0 0 2px;
+  font: 900 clamp(64px, 9vw, 116px)/0.9 'Montserrat', var(--sans);
+  letter-spacing: -0.035em;
+  color: #f2f4f7;
+  text-shadow: 0 4px 30px rgba(0, 0, 0, 0.55);
+  animation: intro-brand-in 1s 0.15s var(--ease) both;
+}
+.intro-brand-q {
+  /* the Start button's turning ring (same gradient, same gem-ring turn), clipped to the letter */
+  background: conic-gradient(from var(--gem-a), #3a8bff, #ee5257, #d0c42e, #4cc88b, #3a8bff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: none;
+  filter: drop-shadow(0 4px 22px rgba(58, 139, 255, 0.35));
+  animation: gem-ring 3s linear infinite;
+}
+@keyframes intro-brand-in { from { opacity: 0; transform: translateY(18px) scale(0.97); letter-spacing: 0.02em; } }
 .intro-kicker {
   font: 600 13px/1 var(--mono);
   letter-spacing: 0.22em;
@@ -185,6 +205,32 @@
 .loading-restart:focus-visible { outline: 2px solid #a8c7fa; outline-offset: 5px; }
 .loading-restart:disabled { cursor: default; }
 .loading-start:disabled { cursor: default; }
+/* Enter / Exit full screen, under the Start button: a quiet text button */
+.loading-fullscreen {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+  padding: 8px 14px 8px 16px;
+  font: 500 14px/1 var(--sans);
+  color: #b9c2cd;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  animation: loading-start-in 0.6s 0.16s var(--ease) both;
+  transition: color 0.2s var(--ease), background 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+.loading-fullscreen:hover { color: #eef1f4; background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.18); }
+.loading-fullscreen:focus-visible { outline: 2px solid #a8c7fa; outline-offset: 4px; }
+.loading-fullscreen kbd {
+  font: 500 11px/1 var(--mono);
+  padding: 3px 6px;
+  border-radius: 5px;
+  color: #c9d1db;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
 .loading-restart kbd {
   font: 500 11px/1 var(--mono);
   padding: 4px 6px;
