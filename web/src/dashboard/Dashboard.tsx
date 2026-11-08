@@ -7,6 +7,7 @@ import { sim, useSim } from '../state/store'
 import { Toasts } from '../ui/Toasts'
 import { Banners } from './Banners'
 import { DronePanel, type DronePanelHandle } from './DronePanel'
+import { CommsGraph } from './CommsGraph'
 import { NetworkGraph } from './NetworkGraph'
 import { GeminiFlare } from '../ui/GeminiFlare'
 import { LoadingScreen } from '../ui/LoadingScreen'
@@ -20,6 +21,7 @@ const MAP_TILE = 'map'
 const LOG_TILE = 'log'
 const NET_TILE = 'net'
 const FF_TILE = 'ff'
+const COMMS_TILE = 'comms'
 const FLIP_MS = 420
 
 /** Browser full screen for the whole dashboard; also toggled with the F key. */
@@ -114,7 +116,7 @@ function Tile({
   children,
 }: {
   id: string
-  slot: number // position in the default grid: 0 = map, 1-4 = drone feeds, 5 = log, 6 = links
+  slot: number // position in the default grid: 0 = map, 1-4 = drone feeds, 5 = log, 6 = links, 8 = comms
   rows: number // rail length while something is focused
   focus: string | null
   label: string
@@ -129,7 +131,7 @@ function Tile({
   return (
     <section
       ref={register}
-      className={`tile tile-${role} tile-${id === MAP_TILE ? 'map' : id === LOG_TILE ? 'log' : id === NET_TILE ? 'net' : id === FF_TILE ? 'ff' : 'feed'}`}
+      className={`tile tile-${role} tile-${id === MAP_TILE ? 'map' : id === LOG_TILE ? 'log' : id === NET_TILE ? 'net' : id === COMMS_TILE ? 'comms' : id === FF_TILE ? 'ff' : 'feed'}`}
       style={
         focus === null ? { gridArea: `t${slot}` } : isFocused ? { gridArea: `1 / 1 / ${rows + 1} / 2` } : { gridColumn: '2' }
       }
@@ -244,7 +246,7 @@ export default function Dashboard() {
     return () => window.removeEventListener('keydown', onKey)
   }, [focusState, setFocus])
 
-  const visible = act === 2 ? 4 : 7 // tiles on the stage
+  const visible = act === 2 ? 5 : 8 // tiles on the stage
   const tileProps = (id: string, slot: number, label: string) => ({
     id,
     slot,
@@ -273,7 +275,7 @@ export default function Dashboard() {
   return (
     <div className="dash">
       <Toasts />
-      <LoadingScreen />
+      <LoadingScreen send={send} />
       <Banners />
       {linkDown && <div className="link-pill">{status === 'connecting' ? 'Connecting to sim' : 'Sim link lost, reconnecting'}</div>}
       {versionMismatch && <div className="link-pill bad">Contract mismatch: server v{hello?.contract_version}</div>}
@@ -343,8 +345,11 @@ export default function Dashboard() {
           <TracePanel detailed={focus === LOG_TILE} />
         </Tile>
         <Tile {...tileProps(NET_TILE, 6, 'Swarm links')}>
-          <NetworkGraph
-            detailed={focus === NET_TILE}
+          <NetworkGraph detailed={focus === NET_TILE} />
+        </Tile>
+        <Tile {...tileProps(COMMS_TILE, 8, 'Comms')}>
+          <CommsGraph
+            detailed={focus === COMMS_TILE}
             actions={
               <button
                 className="icon-btn"
