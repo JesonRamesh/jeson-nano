@@ -196,6 +196,7 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
               type="button"
               className="feed-fail"
               disabled={!alive || !canFail}
+              aria-label={`Fail ${id}`}
               title={
                 !alive ? `${id} is already offline` : !canFail ? 'The last drone flying cannot be failed' : `Fail ${id}: it loses its signal`
               }
@@ -204,7 +205,10 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
                 onFail()
               }}
             >
-              Fail
+              {/* stop icon: an action, not a status chip */}
+              <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden>
+                <rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor" />
+              </svg>
             </button>
           )}
         </div>
