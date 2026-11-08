@@ -23,13 +23,18 @@
 
 - **The problem.** Being lost, caught or trapped is the second leading cause of firefighter deaths on the fireground (18.2%, USFA). Smoke takes away every visual reference, and nobody has a live picture of the building.
 - **What we built.** A swarm goes in first. Four simulated drones explore a **digital twin made from an iPhone LiDAR scan** of the Marshgate building, find fire and a survivor **using only their own sensors**, then hold a chain of checkpoints along the safest route. A person walks that route in first person while the drones talk them through it.
-- **Why you can trust what you see.** Every action is logged with the sensor reading behind it, and the code refuses to log an action without one. The swarm never sees ground truth, and a test fails the build if it tries. When the scene changes (a judge clicks to drop debris, a drone is lost to heat), the drones find out through their LiDAR and cameras and re-plan on screen.
+- **Why you can trust what you see.** Every action is logged with the sensor reading behind it, and the code refuses to log an action without one. The swarm never sees ground truth, and a test fails the build if it tries. When the scene changes (someone clicks to drop debris, a drone is lost to heat), the drones find out through their LiDAR and cameras and re-plan on screen.
 - **Where it runs.** One laptop. MuJoCo on the CPU, Gemma 4 E4B through a local Ollama server on an 8 GB laptop GPU, and nothing in the control loop that needs the internet.
 
-## How it scores against the judging criteria
+## Highlights
 
-| Criterion | Weight | What you will see | Jump to |
-|---|:-:|---|---|
+- **Every decision cites what it perceived.** Each row in the decision log names its sensor and value, and uncertain detections trigger a closer look before anything is marked. [More](#1-every-decision-traces-to-a-sensor-reading)
+- **The world changes, the swarm re-plans.** Debris dropped on the route is flagged by LiDAR **0.2 s** later; the old route turns red and a new one appears. A drone is lost mid-mission and its area is reassigned. [More](#2-the-world-changes-the-swarm-re-plans)
+- **The deadliest failure, handled live.** A safe route goes unsafe while the firefighter is on it: "Stop. Route blocked." and a new route **0.5 s** later. [More](#3-why-it-matters)
+- **One laptop, careful when unsure.** Local Gemma, a measured edge budget, hard timeouts, and explicit rules for uncertainty. [More](#4-one-laptop-careful-when-unsure)
+- **Phone scan → physics twin → coordinating swarm → a human guided through smoke**, backed by about 300 automated tests and an honesty test. [More](#5-from-a-phone-scan-to-a-guided-rescue)
+
+---|:-:|---|---|
 | **Perception-driven action** | 25% | Every row in the decision log cites its sensor and value. Uncertain detections trigger a closer look before anything is marked. | [§1](#1-perception-driven-action-25) |
 | **Adaptation to change** | 25% | Debris dropped on the route: LiDAR flags it **0.2 s** later, the old route turns red and a new one appears. A drone is lost mid-mission and its area is reassigned. | [§2](#2-adaptation-to-change-25) |
 | **Relevance and impact** | 20% | The deadliest failure, a safe route going unsafe while the firefighter is on it, caught live: "Stop. Route blocked." and a new route **0.5 s** later. | [§3](#3-relevance-and-impact-20) |
@@ -54,16 +59,15 @@
 <td><img src="docs/media/mission-complete.jpg" alt="Mission complete summary card"></td>
 </tr>
 <tr>
-<td><b>Act 2: the rescue.</b> A judge walks the route in first person through about 4 m of visibility, following the lead drone, a heads-up arrow and spoken directions.</td>
+<td><b>Act 2: the rescue.</b> A person walks the route in first person through about 4 m of visibility, following the lead drone, a heads-up arrow and spoken directions.</td>
 <td><b>Mission complete.</b> Time, distance, hazards avoided, corrections and re-plans, with the full decision log beside it.</td>
 </tr>
 </table>
 
 ---
 
-## 1. Perception-driven action (25%)
+## 1. Every decision traces to a sensor reading
 
-> *"Every decision traces to what it perceived, and it corrects mid-run."*
 
 **No action without evidence.** Every swarm decision is a `TraceRow`: time, drone, action, a plain-English reason, and an `Evidence` record (sensor, value, camera frame id or LiDAR scan). `Trace.log` raises an error if the evidence or its value is missing, and the pydantic contract requires both. The dashboard shows every row, and rows with a camera frame or LiDAR scan link to it (`img` / `scan`).
 
@@ -99,9 +103,8 @@ Real rows from the recorded run:
 
 ---
 
-## 2. Adaptation to change (25%)
+## 2. The world changes, the swarm re-plans
 
-> *"The scene changes mid-sequence and the agent visibly re-plans."*
 
 **Anyone can change the world mid-run.** Clicking the 3D map drops debris or starts a fire in the MuJoCo world, not in the swarm's memory. The drones find out the honest way: LiDAR change detection for debris, camera + Gemma + heat for fire.
 
@@ -117,7 +120,7 @@ Real rows from the recorded run:
 - `109.7 s` **REPLAN**: new route 67.9 m (+0.7 m)
 - old route drawn **red and dashed**, new route green, checkpoints re-posted
 
-Across a scripted sweep, 8 of 9 judge-style clicks were noticed **0.2–12 s** after placement. The one miss was debris under 0.3 m from a wall, which LiDAR can't tell apart from the wall itself.
+Across a scripted sweep, 8 of 9 unscripted clicks were noticed **0.2–12 s** after placement. The one miss was debris under 0.3 m from a wall, which LiDAR can't tell apart from the wall itself.
 
 </td>
 </tr>
@@ -147,9 +150,8 @@ The lost drone's feed turns to *NO SIGNAL*, its node is struck through on the co
 
 ---
 
-## 3. Relevance and impact (20%)
+## 3. Why it matters
 
-> *"A well-evidenced need, with the most critical failure mode handled on screen."*
 
 **The need.**
 - A US Fire Administration study of 1990–2000 found being **lost, caught or trapped** was the second leading immediate cause of fireground firefighter deaths, at **18.2%** ([Fire Engineering](https://www.fireengineering.com/firefighting/improving-situational-awareness-in-a-fire-structure/)).
@@ -192,9 +194,8 @@ Three safeguards keep the firefighter out of danger:
 
 ---
 
-## 4. Operational autonomy (15%)
+## 4. One laptop, careful when unsure
 
-> *"Runs within a stated edge-device budget and behaves sensibly when unsure."*
 
 **Edge budget.** Everything in the decision loop runs on **one laptop**:
 
@@ -225,9 +226,8 @@ Three safeguards keep the firefighter out of danger:
 
 ---
 
-## 5. Ambition and technical quality (15%)
+## 5. From a phone scan to a guided rescue
 
-> *"An original approach to a demanding problem, executed to a high standard."*
 
 **Real-to-sim in an afternoon.**
 
@@ -253,8 +253,8 @@ The result: a **39 × 52 m** twin with 13 route nodes, 4 fires, 4 debris piles, 
 - **Honest by construction.** `tests/test_honesty.py` greps `sgr/swarm` and `sgr/guidance` for any use of ground truth (comments included), forbids the swarm from importing the world or perception internals, and checks that every trace row carries evidence. The swarm learns only through `Readings` and `Detection`s.
 - **Contracts as the only shared surface.** One pydantic file (`sgr/contracts.py`, version 5) mirrored in TypeScript (`web/src/contracts.ts`). Four people built four packages in parallel against facades (`World`, `Perception`, `Swarm`, `Guidance`).
 - **Robust under stress.** Sweeps over Gemma latency (1–11 s) × start positions: **18/18** marshgate runs complete every beat, plus 9/9 on the test map. Peak drone heat fell from 409–521 °C to ≤ 162 °C after heat-aware planning.
-- **Tested.** About 300 `pytest` tests (`uv run pytest -q`), including a kinematic `FakeWorld` so the swarm can be developed without MuJoCo, a replay tool that scripts judge actions, and a smoke test that gates every merge.
-- **A dashboard built for judges.** A 3D twin with an auto-director camera that glides to events, live drone feeds with LiDAR minimaps and Gemma verdicts, a decision log you can expand, a swarm-links map, a comms graph, and a first-person firefighter view, all running in the browser with three.js.
+- **Tested.** About 300 `pytest` tests (`uv run pytest -q`), including a kinematic `FakeWorld` so the swarm can be developed without MuJoCo, a replay tool that scripts live-demo actions, and a smoke test that gates every merge.
+- **A dashboard built for live demos.** A 3D twin with an auto-director camera that glides to events, live drone feeds with LiDAR minimaps and Gemma verdicts, a decision log you can expand, a swarm-links map, a comms graph, and a first-person firefighter view, all running in the browser with three.js.
 
 <table>
 <tr>
