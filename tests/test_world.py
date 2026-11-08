@@ -345,3 +345,29 @@ def test_drone_model_is_visual_only(map_dir, monkeypatch):
     pb = plain.model.body("D1").id
     assert with_model.model.body_mass[b] == pytest.approx(plain.model.body_mass[pb])
     assert np.allclose(with_model.model.body_inertia[b], plain.model.body_inertia[pb])
+
+
+# ------------------------------------------------------------------ dashboard fog (UI only)
+def test_apply_fog_fades_with_distance():
+    from sgr.world.fog import FOG_RGB, apply_fog
+
+    rgb = np.full((2, 2, 3), 200, np.uint8)
+    depth = np.array([[0.0, 2.0], [6.0, 60.0]])
+    out = apply_fog(rgb, depth, 0.2)
+    assert (out[0, 0] == 200).all()  # at the lens: untouched
+    assert out[0, 1, 0] > out[1, 0, 0] > out[1, 1, 0]  # further = foggier
+    assert np.allclose(out[1, 1], FOG_RGB, atol=1)  # far: all fog
+    assert apply_fog(rgb, depth, 0.0) is rgb  # off
+
+
+@needs_gl
+def test_dashboard_frame_fogs_a_copy_only(world):
+    img, _ = world.render_drone("D1")
+    clean = img.copy()
+    ui = world.dashboard_frame("D1", img)
+    assert (img == clean).all()  # perception's frame is untouched
+    assert ui.shape == img.shape and ui.dtype == np.uint8 and not (ui == img).all()
+    depth = world.render_depth("D1")
+    assert depth.shape == img.shape[:2] and depth.min() > 0
+    world.kill_drone("D2")
+    assert world.render_depth("D2") is None  # dead: static, not fogged

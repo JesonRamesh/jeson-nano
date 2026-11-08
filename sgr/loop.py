@@ -360,7 +360,9 @@ class SimLoop:
         if self.render and self.bus is not None:
             import cv2
 
-            ok, jpg = cv2.imencode(".jpg", frame[:, :, ::-1], [cv2.IMWRITE_JPEG_QUALITY, 70])
+            # the dashboard's copy gets smoke fog like the firefighter view; perception got the clean frame above
+            ui = self.world.dashboard_frame(drone, frame) if hasattr(self.world, "dashboard_frame") else frame
+            ok, jpg = cv2.imencode(".jpg", ui[:, :, ::-1], [cv2.IMWRITE_JPEG_QUALITY, 70])
             if ok:
                 channel = self.scenario.drones.ids.index(drone) + 1
                 self.bus.publish_frame(drone, channel, self._frame_seq, frame_id, jpg.tobytes())
