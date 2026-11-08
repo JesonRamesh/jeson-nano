@@ -113,6 +113,7 @@ function Tile({
   register,
   onFocus,
   onBack,
+  underFs = false,
   children,
 }: {
   id: string
@@ -123,6 +124,7 @@ function Tile({
   register: (el: HTMLElement | null) => void
   onFocus: (id: string) => void
   onBack: () => void
+  underFs?: boolean // this tile's top-right corner sits under the global full-screen button
   children: ReactNode
 }) {
   const down = useRef<{ x: number; y: number } | null>(null)
@@ -131,7 +133,7 @@ function Tile({
   return (
     <section
       ref={register}
-      className={`tile tile-${role} tile-${id === MAP_TILE ? 'map' : id === LOG_TILE ? 'log' : id === NET_TILE ? 'net' : id === COMMS_TILE ? 'comms' : id === FF_TILE ? 'ff' : 'feed'}`}
+      className={`tile tile-${role} tile-${id === MAP_TILE ? 'map' : id === LOG_TILE ? 'log' : id === NET_TILE ? 'net' : id === COMMS_TILE ? 'comms' : id === FF_TILE ? 'ff' : 'feed'}${underFs ? ' tile-under-fs' : ''}`}
       style={
         focus === null ? { gridArea: `t${slot}` } : isFocused ? { gridArea: `1 / 1 / ${rows + 1} / 2` } : { gridColumn: '2' }
       }
@@ -247,8 +249,13 @@ export default function Dashboard() {
   }, [focusState, setFocus])
 
   const visible = act === 2 ? 5 : 8 // tiles on the stage
+  // the tile whose top-right corner is under the full-screen button (it nudges its corner chip left):
+  // grid = the D2 feed (Act 2 leaves that cell empty); focus = the first tile in the rail
+  const order = [...(act === 2 ? [FF_TILE] : []), MAP_TILE, ...(act === 1 ? drones.map((d) => d.id) : []), LOG_TILE, NET_TILE, COMMS_TILE]
+  const underFs = focus === null ? (act === 1 ? drones[1]?.id : undefined) : order.find((t) => t !== focus)
   const tileProps = (id: string, slot: number, label: string) => ({
     id,
+    underFs: id === underFs,
     slot,
     rows: visible - 1,
     label,
@@ -277,6 +284,14 @@ export default function Dashboard() {
       <Toasts />
       <LoadingScreen send={send} />
       <Banners />
+      <button
+        className="icon-btn fs-btn"
+        onClick={fullscreen.toggle}
+        title={fullscreen.on ? 'Exit full screen (F)' : 'Full screen (F)'}
+        aria-label={fullscreen.on ? 'Exit full screen' : 'Full screen'}
+      >
+        <FullscreenIcon exit={fullscreen.on} />
+      </button>
       {linkDown && <div className="link-pill">{status === 'connecting' ? 'Connecting to sim' : 'Sim link lost, reconnecting'}</div>}
       {versionMismatch && <div className="link-pill bad">Contract mismatch: server v{hello?.contract_version}</div>}
 
@@ -350,19 +365,7 @@ export default function Dashboard() {
           <NetworkGraph detailed={focus === NET_TILE} />
         </Tile>
         <Tile {...tileProps(COMMS_TILE, 8, 'Comms')}>
-          <CommsGraph
-            detailed={focus === COMMS_TILE}
-            actions={
-              <button
-                className="icon-btn"
-                onClick={fullscreen.toggle}
-                title={fullscreen.on ? 'Exit full screen (F)' : 'Full screen (F)'}
-                aria-label={fullscreen.on ? 'Exit full screen' : 'Full screen'}
-              >
-                <FullscreenIcon exit={fullscreen.on} />
-              </button>
-            }
-          />
+          <CommsGraph detailed={focus === COMMS_TILE} />
         </Tile>
       </main>
     </div>
