@@ -186,11 +186,21 @@ def test_lead_moves_ahead_of_firefighter():
 
 
 def test_waiting_lead_round_a_corner_arrow_follows_route():
-    """Regression (replay deadlock): the lead holds far ahead round the corner; the arrow must follow the
+    """Regression (replay deadlock): the lead holds ahead round the corner; the arrow must follow the
     route (east, to the corner), not point straight at the lead through the wall (north-east)."""
-    w = StubWorld({"D1": (16.0, 11.0), "D2": (16, 3)})
+    w = StubWorld({"D1": (16.0, 4.5), "D2": (26, 3)})  # 9.5 m ahead along the route: holds (6 < gap <= 10)
     m, cmds = Guidance(world=w).tick(0.0, Pose(x=8.0, y=3.0, yaw=0.0), _swarm())
     assert m.subtitle == "Follow me." and cmds["D1"].vx == 0 and cmds["D1"].vy == 0
+    assert abs(m.arrow_deg) < 5
+
+
+def test_far_lead_round_a_corner_comes_back_along_the_route():
+    """A lead > 10 m ahead flies back to the firefighter, along the route (south to the corner), not
+    through the wall; the arrow still follows the route."""
+    w = StubWorld({"D1": (16.0, 11.0), "D2": (26, 3)})  # 16 m ahead along the route
+    m, cmds = Guidance(world=w).tick(0.0, Pose(x=8.0, y=3.0, yaw=0.0), _swarm())
+    assert m.subtitle.startswith("Your drone is coming back")
+    assert cmds["D1"].vy < 0 and abs(cmds["D1"].vx) < 0.05  # back down the corridor, not diagonally
     assert abs(m.arrow_deg) < 5
 
 
@@ -250,3 +260,49 @@ def test_walking_into_fire_pushes_real_firefighter_back(tmp_path):
     g = Guidance(world=w)
     m, _ = g.tick(0.0, f0, _swarm(delta=[(i, j, "fire")]))
     assert m.alarm and w.ff_pose().x < f0.x - 0.4  # pushed back against its direction of travel
+
+
+# ------------------------------------------------------------------ one drone left (no chain checkpoints)
+class MovingWorld(StubWorld):
+    """The lead actually flies (its velocity command is integrated), for whole-walk tests."""
+
+    def fly(self, d, cmd, dt=0.1):
+        x, y = self.poses[d]
+        self.poses[d] = (x + cmd.vx * dt, y + cmd.vy * dt)
+
+
+def _walk_alone(lead_start, seconds=40.0):
+    """One drone, no checkpoints; the firefighter walks wherever the arrow points at 1.4 m/s."""
+    w = MovingWorld({"D1": lead_start})
+    g = Guidance(world=w)
+    sv = SurvivorState(status="confirmed", x=16.0, y=15.0, conf=0.9)
+    ff, t, subs, said = [2.0, 3.0], 0.0, [], []
+    while t < seconds and not g.complete:
+        sw = SwarmState(t=t, route=Route(points=ROUTE, status="ok", version=1), checkpoints=[], lead="D1",
+                        chain_formed=True, survivor=sv)
+        m, cmds = g.tick(t, Pose(x=ff[0], y=ff[1], yaw=0.0), sw)
+        subs.append(m.subtitle)
+        said += [c.kind for c in g.drain_callouts()]
+        if "D1" in cmds:
+            w.fly("D1", cmds["D1"])
+        h = math.radians(m.arrow_deg)
+        ff = [ff[0] + 0.14 * math.cos(h), ff[1] + 0.14 * math.sin(h)]
+        t += 0.1
+    return g, w, subs, said
+
+
+def test_single_drone_leads_without_checkpoints():
+    g, w, subs, said = _walk_alone((3.5, 3.0))
+    assert g.complete and g.lead == "D1"
+    assert not any(s.startswith(("Follow me", "Your drone")) for s in subs)
+    assert said[0] == "intro" and "handover_out" not in said
+
+
+def test_far_lead_flies_back_to_the_firefighter():
+    """The only drone is still over the survivor when Act 2 starts: it comes back instead of waiting there."""
+    g, w, subs, said = _walk_alone((16.0, 14.0))
+    assert g.complete
+    assert subs[0].startswith("Your drone is coming back")
+    assert not any(s.startswith("Follow me") for s in subs)  # never "waits" 20 m away
+    assert any(s.startswith("Follow the drone") for s in subs)  # then leads as usual
+    assert said[0] == "intro" and "lead_wait" not in said
