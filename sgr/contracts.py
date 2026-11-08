@@ -21,10 +21,11 @@ from typing import Annotated, Any, Literal, Union
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator
 
-CONTRACT_VERSION = 4
+CONTRACT_VERSION = 5
 # v2: Scenario.checkpoints, Checkpoint.node (W's authored checkpoints), SwarmState.relook_requests (§8.4)
 # v3: CalloutMsg (Act 2 drone voices)
 # v4: VoiceModeMsg (online Gemini voices / offline local voices), StateMsg.voice
+# v5: FailDroneMsg (experimental: the presenter fails a chosen drone; never the last one)
 
 
 class _Base(BaseModel):
@@ -595,8 +596,16 @@ class VoiceModeMsg(_Base):
     mode: Literal["online", "offline"]
 
 
+class FailDroneMsg(_Base):
+    """Experimental (W): fail this drone now (it loses its signal: goes dark, stops publishing).
+    The sim refuses if it would leave no drone flying, so at most all-but-one can fail."""
+
+    type: Literal["fail_drone"] = "fail_drone"
+    drone: str
+
+
 ClientMessage = Annotated[
-    Union[ClickMsg, UndoMsg, ControlMsg, Act2StartMsg, SnapshotMsg, FFInputMsg, VoiceModeMsg],
+    Union[ClickMsg, UndoMsg, ControlMsg, Act2StartMsg, SnapshotMsg, FFInputMsg, VoiceModeMsg, FailDroneMsg],
     Field(discriminator="type"),
 ]
 

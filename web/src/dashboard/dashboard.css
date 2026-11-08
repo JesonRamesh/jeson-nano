@@ -1189,3 +1189,28 @@ kbd {
 .ff-voice button.on { color: var(--text); background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.18); }
 .ff-voice button:disabled { cursor: default; opacity: 0.6; }
 .tile-rail .ff-voice { display: none; }
+
+/* Experimental (W): "Fail" button on each camera tile -- the drone loses its signal */
+.feed-fail {
+  margin-left: auto;
+  pointer-events: auto; /* .feed-top lets clicks through to the tile; the button must catch them */
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #ffb4a8;
+  background: rgba(120, 20, 10, 0.45);
+  border: 1px solid rgba(255, 120, 100, 0.45);
+  backdrop-filter: blur(12px) saturate(150%);
+  border-radius: 7px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.feed-fail:hover:not(:disabled) {
+  background: rgba(170, 30, 15, 0.7);
+  color: #fff;
+}
+.feed-fail:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}

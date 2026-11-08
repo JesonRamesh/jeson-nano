@@ -42,6 +42,7 @@ SAME_ROUTE_DEV_M = 1.5  # ... and never further than this from the old line is t
 OLD_ROUTE_S = 6.0
 REPLAN_SETTLE_S = 1.0  # after a re-plan, more of the same blockage is folded into one follow-up (first one: instant)
 NO_ROUTE_RECHECK_S = 2.0
+WATCH_MIN_DRONES = 3  # a fire watcher only while at least this many drones fly (never take the last searchers)
 WATCH_GIVEUP_S = 40.0  # keep re-trying a safe watch post this long (more fires get confirmed meanwhile)
 WATCH_REACH_S = 15.0  # a watcher that hasn't reached its post by then gets another one
 REPOST_S = 5.0  # a watcher pushed off its post (too hot) gets a new one after this
@@ -402,6 +403,11 @@ class Rescue:
     def _fire_watch(self, t: float, agents: dict[str, Agent], alive: dict[str, Pose]) -> None:
         if self.watcher is not None and self.watcher not in alive:
             self.watcher, self._watch_done = None, True  # the watcher was lost (flare-up): don't replace it
+            return
+        if len(alive) < WATCH_MIN_DRONES:  # too few drones left: everyone searches, nobody just watches a fire
+            if self.watcher is not None:
+                agents[self.watcher].unstation()
+                self.watcher, self._watch_done = None, True
             return
         if self.watcher is not None and not self._watch_done:
             ag = agents[self.watcher]

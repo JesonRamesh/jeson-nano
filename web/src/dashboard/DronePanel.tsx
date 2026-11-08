@@ -14,6 +14,10 @@ interface Props {
   state?: DroneState
   detection?: DetectionMsg
   tempLimit: number
+  /** Experimental (W): fail this drone (it loses its signal). Omitted = no button. */
+  onFail?: () => void
+  /** False when this is the last drone flying (the sim would refuse anyway). */
+  canFail?: boolean
 }
 
 const CAM_W = 320
@@ -89,7 +93,7 @@ function LidarTopView({ lidar, colour }: { lidar: number[]; colour: string }) {
 const ANSWER_GLOW_MS = 4000 // Gemini highlight after Gemma answers
 
 export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePanel(
-  { id, colour, state, detection, tempLimit },
+  { id, colour, state, detection, tempLimit, onFail, canFail = true },
   ref,
 ) {
   const imgRef = useRef<HTMLImageElement>(null)
@@ -187,6 +191,22 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
           <span className={`feed-temp ${hot ? 'hot' : ''}`} title="Drone temperature">
             {alive ? `${temp.toFixed(0)}°C` : '--°C'}
           </span>
+          {onFail && (
+            <button
+              type="button"
+              className="feed-fail"
+              disabled={!alive || !canFail}
+              title={
+                !alive ? `${id} is already offline` : !canFail ? 'The last drone flying cannot be failed' : `Fail ${id}: it loses its signal`
+              }
+              onClick={(e) => {
+                e.stopPropagation() // don't toggle the tile focus
+                onFail()
+              }}
+            >
+              Fail
+            </button>
+          )}
         </div>
         <GeminiFlare active={gemLive} className="tile-flare" />
         <div className="feed-bottom">
