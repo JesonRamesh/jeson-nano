@@ -37,6 +37,8 @@ CROSS_MIN_SPEED = 0.3  # m/s: slower than this is hovering, not crossing
 SLOW_MS = 0.15  # below this speed, don't chase the travel direction (it flips around: spinning)
 SCAN_AMPL = math.radians(70)  # idle / sentinel camera scan: ±70° ...
 SCAN_RATE = 0.5  # ... at this angular frequency (rad/s), never a continuous spin
+WOBBLE_RAD = math.radians(8)  # blockage re-check: sway ±8° (> half the 10° LiDAR ray spacing) ...
+WOBBLE_RATE = 0.8  # ... slowly (≤ 0.7° per tick), so a ray stays in a 0.2 m cell for the 2 scans clearing needs
 # inspect / retreat (§8.4)
 IN_POSITION_M = 0.4
 FACING_RAD = math.radians(15)
@@ -61,6 +63,14 @@ ALT_GAIN = 1.0
 
 _LIDAR_ANG = np.radians(np.arange(config.LIDAR_RAYS) * 360.0 / config.LIDAR_RAYS)
 _STRUCT = np.ones((2 * GOAL_NEAR_CELLS + 1, 2 * GOAL_NEAR_CELLS + 1), bool)
+
+
+def goal_mask(belief: BeliefGrid, area: Area) -> np.ndarray:
+    """Cells a drone may fly to to see this area's unsearched floor: near it, flyable, not too hot.
+    (The area's cells can be connected on the map through a gap too narrow for a drone: then this is empty
+    on the reachable side, and the area must not be handed out.)"""
+    cm = cost_map(belief)
+    return binary_dilation(area.unsearched(belief), _STRUCT) & cm.traversable & (belief.heat < NO_STAY)
 
 
 def _wrap(a: float) -> float:
@@ -137,10 +147,12 @@ class Agent:
         self.invalidate()
 
     def station(self, xy: tuple[float, float], face: tuple[float, float] | None = None, sweep: bool = False,
-                mode: str = "CHAIN", task: str = "") -> None:
-        """Hold a fixed spot (chain checkpoint / fire watch) until `unstation()`; replaces exploring."""
+                mode: str = "CHAIN", task: str = "", wobble: bool = False) -> None:
+        """Hold a fixed spot (chain checkpoint / fire watch) until `unstation()`; replaces exploring.
+        wobble: while facing `face`, sway a little so LiDAR rays cover the gaps between them (blockage re-check)."""
         if self._station != xy:
             self._spath = None
+        self._station_wobble = wobble
         self._station, self._station_face, self._station_sweep = xy, face, sweep
         self._station_mode, self._station_task = mode, task
 
@@ -225,8 +237,7 @@ class Agent:
         belief.dead_t[sl][newly] = belief.now
 
     def _goal_mask(self, belief: BeliefGrid, area: Area) -> np.ndarray:
-        cm = cost_map(belief)
-        return binary_dilation(self._unsearched(belief, area), _STRUCT) & cm.traversable & (belief.heat < NO_STAY)
+        return goal_mask(belief, area)
 
     def _plan(self, t: float, pose: Pose, belief: BeliefGrid, area: Area) -> bool:
         """Pick the nearest reachable goal near unsearched cells of the area. False = nothing left here."""
@@ -365,6 +376,8 @@ class Agent:
             elif self._station_face is not None:
                 fx, fy = self._station_face
                 yaw_des = math.atan2(fy - pose.y, fx - pose.x)
+                if getattr(self, "_station_wobble", False):  # sway so the 10°-apart LiDAR rays sweep the target
+                    yaw_des = _wrap(yaw_des + WOBBLE_RAD * math.sin(WOBBLE_RATE * t))
                 self._yaw_from_travel = False
         elif area is None:
             self.mode = "IDLE"

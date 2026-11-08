@@ -151,7 +151,7 @@ class Rescue:
             return
         self._checker = d
         agents[d].patrol(None)
-        agents[d].station(post, face=self._blockage, mode="CHAIN", task="re-checking the blockage")
+        agents[d].station(post, face=self._blockage, mode="CHAIN", task="re-checking the blockage", wobble=True)
         self.trace.log(t, d, "INSPECT", f"{d} re-checking the blockage near ({bx:.1f}, {by:.1f}) from "
                                         f"({post[0]:.1f}, {post[1]:.1f})",
                        Evidence(sensor="planner", value={"blockage": [round(bx, 2), round(by, 2)],

@@ -48,6 +48,8 @@ SUSPECT_NORM_MAX = 2.0  # a thermometer estimate can be off (mirror ambiguity): 
 #                        cross it as briefly as possible, but only a camera-confirmed fire may seal a passage
 RELOCATE_M = 1.0  # re-plan a retreat when the source estimate moves this much
 REJECTED_MERGE_M = 1.0  # a new detection this close to a rejected one (same label) is ignored
+REVISIT_AFTER_S = 60.0  # ... but a ruled-out PERSON gets another look after this (perception forgets it after 60 s)
+REVISIT_RADII_M = (2.0, 3.0, 4.0, 5.0)  # viewpoints for that look (the camera sees a person out to ~5 m)
 _RING = np.radians(np.arange(0, 360, 15))
 
 
@@ -80,6 +82,7 @@ class Hazards:
 
     # ------------------------------------------------------------------ detections
     def on_detection(self, t: float, det: Detection, agents: dict[str, Agent], alive: dict[str, Pose]) -> None:
+        self._now = t
         if det.id in self.done or det.world_xy is None:
             return
         xy = (det.world_xy.x, det.world_xy.y)
@@ -87,7 +90,7 @@ class Hazards:
         ins = self.active.get(det.id)
         if det.status == "pending":
             if ins is None and any(lab == det.label and math.hypot(x - xy[0], y - xy[1]) <= REJECTED_MERGE_M
-                                   for lab, x, y in self.rejected):
+                                   and not self._stale_person(lab, x, y, t) for lab, x, y in self.rejected):
                 self.done.add(det.id)  # same spot was already ruled out: don't stop for it again
                 return
             if ins is None:
@@ -249,6 +252,8 @@ class Hazards:
         self.done.add(det.id)
         if det.status in ("rejected", "low_conf", "unconfirmed") and det.world_xy is not None:
             self.rejected.append((det.label, det.world_xy.x, det.world_xy.y))
+            if det.label == "person":  # [x, y, ruled out at, last revisited]: worth another look later
+                self._person_rejects().append([det.world_xy.x, det.world_xy.y, self._now, self._now])
         ins = self.active.pop(det.id, None)
         if ins and ins.drone:
             agents[ins.drone].release()
@@ -262,22 +267,56 @@ class Hazards:
             return None
         return min(free, key=lambda d: math.hypot(alive[d].x - xy[0], alive[d].y - xy[1]))
 
-    def _standoff(self, target: tuple[float, float], pose: Pose | None) -> tuple[float, float]:
+    # ------------------------------------------------------------------ ruled-out "person" spots
+    def _person_rejects(self) -> list[list[float]]:
+        if not hasattr(self, "person_rejects"):  # snapshots saved before this existed
+            self.person_rejects = []
+        return self.person_rejects
+
+    def _stale_person(self, label: str, x: float, y: float, t: float) -> bool:
+        """A "no person here" verdict older than REVISIT_AFTER_S no longer blocks a new sighting there."""
+        return label == "person" and any(math.hypot(px - x, py - y) <= REJECTED_MERGE_M and t - t0 > REVISIT_AFTER_S
+                                         for px, py, t0, _ in self._person_rejects())
+
+    def revisit_due(self, t: float) -> tuple[float, float, float] | None:
+        """The ruled-out person spot that has waited longest for another look, if one is due: (x, y, ruled out at)."""
+        due = [r for r in self._person_rejects() if t - r[3] > REVISIT_AFTER_S]
+        if not due:
+            return None
+        x, y, t0, _ = min(due, key=lambda r: r[3])
+        return x, y, t0
+
+    def mark_revisited(self, xy: tuple[float, float], t: float) -> None:
+        for r in self._person_rejects():
+            if math.hypot(r[0] - xy[0], r[1] - xy[1]) <= REJECTED_MERGE_M:
+                r[3] = t
+
+    def viewpoint(self, target: tuple[float, float], pose: Pose) -> tuple[float, float] | None:
+        """A reachable spot 2-5 m from the target with line of sight (the closest ring that has one, cheapest to
+        fly to). None if the drone can't get a view of it at all."""
+        p = self._standoff(target, pose, radii=REVISIT_RADII_M)
+        return None if p == (pose.x, pose.y) else p
+
+    def _standoff(self, target: tuple[float, float], pose: Pose | None,
+                  radii: tuple[float, ...] | None = None) -> tuple[float, float]:
         """A reachable point ~2 m from the target with line of sight to it, cheapest from the drone."""
         cm = cost_map(self.belief)
         r = config.INSPECT_STANDOFF_M
         df = DistanceField(self.belief, (pose.x, pose.y)) if pose else None
         best, bc = None, math.inf
-        for a in _RING:
-            px, py = target[0] + r * math.cos(a), target[1] + r * math.sin(a)
-            i, j = self.belief.world_to_cell(px, py)
-            if not (self.belief.inside(i, j) and cm.traversable[j, i]) or not self._los((px, py), target):
-                continue
-            if self.belief.heat[j, i] >= NO_STAY:  # it hovers there: under the 70 °C limit
-                continue
-            c = df.cost[j, i] if df else 0.0
-            if c < bc:
-                best, bc = (px, py), c
+        for r in radii or (r,):
+            for a in _RING:
+                px, py = target[0] + r * math.cos(a), target[1] + r * math.sin(a)
+                i, j = self.belief.world_to_cell(px, py)
+                if not (self.belief.inside(i, j) and cm.traversable[j, i]) or not self._los((px, py), target):
+                    continue
+                if self.belief.heat[j, i] >= NO_STAY:  # it hovers there: under the 70 °C limit
+                    continue
+                c = df.cost[j, i] if df else 0.0
+                if c < bc:
+                    best, bc = (px, py), c
+            if best is not None:  # the closest ring with a view wins
+                break
         if best is None:  # nothing clean at 2 m: just get as close as the drone can
             return (pose.x, pose.y) if pose else target
         return best
