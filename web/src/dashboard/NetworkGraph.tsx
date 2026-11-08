@@ -22,6 +22,9 @@ interface View {
   oy: number // px of world y = 0
 }
 
+/** Canvas text uses the dashboard's mono face (index.css --mono). */
+const MONO = `'Google Sans Code Variable', 'Google Sans Code', ui-monospace, monospace`
+
 const TRAIL_MAX = 160 // samples per drone
 const TRAIL_STEP_M = 0.35 // record a trail point after moving this far
 const ROAD_STEP_M = 0.2 // road reveal resolution (= belief cell)
@@ -391,7 +394,7 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
       const tree = relayTree(treePts)
       ctx.strokeStyle = C.link
       ctx.lineWidth = 1.25
-      ctx.font = '500 10px "IBM Plex Mono", monospace'
+      ctx.font = `500 10px ${MONO}`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       for (const [a, b] of tree) {
@@ -426,7 +429,7 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
         if (det) {
           ctx.fillStyle = C.label
           ctx.textAlign = 'left'
-          ctx.font = '500 11px "IBM Plex Mono", monospace'
+          ctx.font = `500 11px ${MONO}`
           ctx.fillText('BASE', bx + r + 6, by)
         }
       }
@@ -448,7 +451,7 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
         if (det) {
           ctx.fillStyle = C.label
           ctx.textAlign = 'left'
-          ctx.font = '500 11px "IBM Plex Mono", monospace'
+          ctx.font = `500 11px ${MONO}`
           ctx.fillText(s.status === 'confirmed' ? 'SURVIVOR' : 'SURVIVOR?', sx + r + 6, sy)
         }
       }
@@ -488,10 +491,10 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
         }
         ctx.textAlign = 'left'
         ctx.fillStyle = d.alive ? C.label : C.lost
-        ctx.font = `${det ? 600 : 500} ${det ? 12 : 10}px "IBM Plex Mono", monospace`
+        ctx.font = `${det ? 600 : 500} ${det ? 12 : 10}px ${MONO}`
         ctx.fillText(d.id, px + r + 5, py - (det ? 6 : 0))
         if (det) {
-          ctx.font = '400 10px "IBM Plex Mono", monospace'
+          ctx.font = `400 10px ${MONO}`
           ctx.fillStyle = d.alive ? C.dim : C.lost
           ctx.fillText(d.alive ? d.status.toLowerCase() : 'offline', px + r + 5, py + 8)
         }
@@ -515,7 +518,7 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
         ctx.stroke()
         ctx.fillStyle = C.label
         ctx.textAlign = 'left'
-        ctx.font = '400 10px "IBM Plex Mono", monospace'
+        ctx.font = `400 10px ${MONO}`
         ctx.fillText(`${nice} m`, bx + len + 6, by - 2)
         // north arrow
         const nx = size.w - 22

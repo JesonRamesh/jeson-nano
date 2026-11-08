@@ -995,3 +995,80 @@ kbd {
 .summary-card dt { color: var(--dim); font-size: 14px; }
 .summary-card dd { margin: 0; font: 500 15px/1.2 var(--mono); text-align: right; }
 .summary-card .btn { width: 100%; text-transform: none; letter-spacing: 0.04em; }
+
+/* ================================================================== Gemini / Gemma
+   The spark marks Gemma's output; it pulses while Gemma is thinking. The flare is a quiet,
+   always-moving glow of the spark colours along the bottom of the 3D view. */
+.gspark { flex: none; display: block; opacity: 0.7; transition: opacity 0.4s var(--ease); }
+.gspark.active {
+  opacity: 1;
+  transform-origin: 50% 50%;
+  animation: gspark-pulse 1.3s ease-in-out infinite;
+}
+@keyframes gspark-pulse {
+  0%, 100% { transform: scale(0.82); filter: drop-shadow(0 0 0 rgba(58, 139, 255, 0)); }
+  50% { transform: scale(1.12); filter: drop-shadow(0 0 5px rgba(58, 139, 255, 0.85)); }
+}
+.det-caption.thinking { color: var(--gem-light); }
+
+.gemini-flare {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 22%;
+  min-height: 70px;
+  max-height: 160px;
+  z-index: 1; /* over the canvas, under the overlays and buttons (z 2+) */
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0.32;
+  transition: opacity 1.6s var(--ease);
+  -webkit-mask-image: linear-gradient(to top, #000 0%, rgba(0, 0, 0, 0.55) 35%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 0%, rgba(0, 0, 0, 0.55) 35%, transparent 100%);
+  mix-blend-mode: screen;
+}
+.gemini-flare.active { opacity: 0.6; }
+/* two wide bands of the four colours drifting at different speeds and directions,
+   so the mix along the edge never repeats the same way twice */
+.gf-band {
+  position: absolute;
+  bottom: -40%;
+  left: 0;
+  width: 200%;
+  height: 120%;
+  filter: blur(26px);
+  background-repeat: repeat-x;
+  background-size: 50% 100%;
+  will-change: transform;
+}
+.gf-a {
+  background-image: linear-gradient(90deg, #3a8bff 0%, #ee5257 25%, #d0c42e 45%, #4cc88b 70%, #3a8bff 100%);
+  animation: gf-drift 38s linear infinite;
+}
+.gf-b {
+  bottom: -55%;
+  opacity: 0.6;
+  background-image: linear-gradient(90deg, #4cc88b 0%, #3a8bff 30%, #0b57d0 50%, #ee5257 75%, #4cc88b 100%);
+  animation: gf-drift 61s linear infinite reverse, gf-breathe 9s ease-in-out infinite alternate;
+}
+.gf-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #3a8bff 20%, #ee5257 45%, #d0c42e 65%, #4cc88b 85%, transparent);
+  background-size: 200% 100%;
+  opacity: 0.55;
+  animation: gf-line 14s linear infinite;
+}
+.gemini-flare.active .gf-a { animation-duration: 16s; }
+.gemini-flare.active .gf-line { opacity: 0.9; animation-duration: 5s; }
+@keyframes gf-drift { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@keyframes gf-breathe { from { opacity: 0.35; } to { opacity: 0.75; } }
+@keyframes gf-line { from { background-position: 0% 0; } to { background-position: -200% 0; } }
+.tile-rail .gemini-flare { height: 30%; min-height: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .gf-band, .gf-line, .gspark.active { animation: none; }
+}

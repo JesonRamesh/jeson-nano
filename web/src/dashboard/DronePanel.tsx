@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import type { DetectionMsg, DroneState } from '../contracts'
+import { GeminiSpark } from '../ui/GeminiSpark'
 import { noEmDash } from '../ui/text'
 
 export interface DronePanelHandle {
@@ -174,8 +175,9 @@ export const DronePanel = forwardRef<DronePanelHandle, Props>(function DronePane
             {detection ? (
               <>
                 <span className="det-tag">{detection.status.replace('_', ' ')}</span>
-                <span className="det-caption">
-                  {g?.pending ? 'Gemma checking' : g?.caption ? noEmDash(g.caption) : 'no Gemma result'}
+                <GeminiSpark active={!!g?.pending} title={g?.pending ? 'Gemma thinking' : 'Gemma'} />
+                <span className={`det-caption ${g?.pending ? 'thinking' : ''}`}>
+                  {g?.pending ? 'Gemma thinking…' : g?.caption ? noEmDash(g.caption) : 'no Gemma result'}
                   {g?.conf != null && !g.pending && <span className="det-conf">{g.conf.toFixed(2)}</span>}
                 </span>
               </>

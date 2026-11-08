@@ -1,10 +1,9 @@
 /* Design tokens: a ground-station look. Graphite surfaces, hairline rules, one warm
-   instrument accent, telemetry in a monospace face. Fonts are bundled (no network). */
-@import '@fontsource/ibm-plex-sans/400.css';
-@import '@fontsource/ibm-plex-sans/500.css';
-@import '@fontsource/ibm-plex-sans/600.css';
-@import '@fontsource/ibm-plex-mono/400.css';
-@import '@fontsource/ibm-plex-mono/500.css';
+   instrument accent, telemetry in a monospace face. Fonts are bundled (no network):
+   Google Sans Flex for UI text, Google Sans Code for telemetry (the open release of
+   Google's mono face). */
+@import '@fontsource-variable/google-sans-flex/index.css';
+@import '@fontsource-variable/google-sans-code/index.css';
 
 :root {
   --bg: #07090b;
@@ -22,8 +21,16 @@
   --bad: #ff5a4e;
   --info: #7fb4ff;
 
-  --sans: 'IBM Plex Sans', system-ui, sans-serif;
-  --mono: 'IBM Plex Mono', ui-monospace, monospace;
+  /* Gemini: Material blues + the four "spark" colours (Gemma activity only) */
+  --gem-primary: #0b57d0;
+  --gem-light: #a8c7fa;
+  --gem-blue: #3a8bff;
+  --gem-red: #ee5257;
+  --gem-yellow: #d0c42e;
+  --gem-green: #4cc88b;
+
+  --sans: 'Google Sans Flex Variable', 'Google Sans Flex', 'Google Sans', system-ui, sans-serif;
+  --mono: 'Google Sans Code Variable', 'Google Sans Mono', 'Google Sans Code', ui-monospace, monospace;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   /* Projector-readable: body text >= 16 px (spec §10.1). */
