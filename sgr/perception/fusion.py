@@ -21,6 +21,10 @@ CONFIRM_AT = 0.7
 FIRST_LOOK_MIN_FAST = 0.7
 REJECT_EARLY_BELOW = 0.25
 MAX_RELOOKS = 2
+# A hi-vis person hit this strong is never rejected (0 false persons over the 348-pose sweep), but Gemma misses
+# the real survivor from some angles ("Empty hallway"). Rejecting would blacklist the survivor's spot and the
+# mission could never complete: instead it stays unsure and live perception re-checks it from a new view.
+STRONG_PERSON_FAST = 0.9
 
 
 def agrees(label: Label, g: GemmaResult) -> bool:
@@ -36,6 +40,8 @@ def fuse(label: Label, score_fast: float, gemma: GemmaResult | None, relooks: in
     ok = agrees(label, gemma)
     combined = 0.4 * score_fast + 0.6 * gemma.confidence if ok else 0.3 * score_fast
     combined = round(combined, 3)
+    if not ok and label == "person" and score_fast >= STRONG_PERSON_FAST:
+        return combined, ("unconfirmed" if relooks >= MAX_RELOOKS else "low_conf")  # never a blacklist
     if combined >= CONFIRM_AT:
         if relooks == 0 and score_fast < FIRST_LOOK_MIN_FAST:
             return combined, "low_conf"  # weak colour evidence: confirm only after a closer look
