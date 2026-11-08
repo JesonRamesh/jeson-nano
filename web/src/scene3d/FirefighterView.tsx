@@ -118,37 +118,6 @@ function CalloutBubble({ c }: { c: CalloutMsg | null }) {
 /** Act 2 voices: online = Gemini voices (drones + HUD), offline = local voices; unavailable = no API key. */
 type VoiceMode = 'online' | 'offline' | 'unavailable' | null
 
-/** The Online / Offline voice switch (top right of the firefighter view). V toggles it. */
-function VoiceSwitch({ mode, send }: { mode: VoiceMode; send: (m: ClientMsg) => void }) {
-  const can = mode === 'online' || mode === 'offline'
-  useEffect(() => {
-    if (!can) return
-    const down = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() !== 'v' || e.ctrlKey || e.metaKey || e.altKey) return
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      send({ type: 'voice_mode', mode: mode === 'online' ? 'offline' : 'online' })
-    }
-    window.addEventListener('keydown', down)
-    return () => window.removeEventListener('keydown', down)
-  }, [can, mode, send])
-  if (!mode) return null
-  return (
-    <div className="ff-voice" onClick={(e) => e.stopPropagation()} title="Act 2 voices (V)">
-      <span className="ff-voice-label">Voices</span>
-      <button
-        className={mode === 'online' ? 'on' : ''}
-        disabled={!can}
-        onClick={() => send({ type: 'voice_mode', mode: 'online' })}
-      >
-        Online · Gemini
-      </button>
-      <button className={mode !== 'online' ? 'on' : ''} disabled={!can} onClick={() => send({ type: 'voice_mode', mode: 'offline' })}>
-        {mode === 'unavailable' ? 'Offline (no API key)' : 'Offline'}
-      </button>
-    </div>
-  )
-}
-
 /** Speaks guidance with a local (offline) voice through the shared headset queue; danger lines interrupt.
  *  In online mode the HUD lines arrive as Gemini-voiced callouts instead. One beep per alarm. */
 function useVoiceAndAlarm(g: GuidanceMsg | null, mode: VoiceMode) {
@@ -275,7 +244,6 @@ export function FirefighterView({ send }: { send: (m: ClientMsg) => void }) {
         </div>
       )}
       <CalloutBubble c={callout} />
-      <VoiceSwitch mode={voiceMode} send={send} />
       <div className="ff-subtitle">{g?.subtitle ? noEmDash(g.subtitle) : ffKnown ? 'Waiting for guidance' : 'Waiting for the firefighter'}</div>
       {!locked && <div className="ff-hint">Click to look around · WASD to walk · arrows to turn · Esc to release</div>}
     </div>
