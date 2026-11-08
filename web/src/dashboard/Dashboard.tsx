@@ -199,6 +199,9 @@ export default function Dashboard() {
   const act = state?.act ?? 1
   const phase = state?.phase ?? ''
   const sendAct2 = useCallback(() => send({ type: 'act2_start' }), [send])
+  // Restart Act 1 from the beginning (the server loads the act1_start snapshot and re-sends hello,
+  // which clears the summary card)
+  const restartAct1 = useCallback(() => send({ type: 'control', action: 'reset' }), [send])
   useEffect(() => {
     // G = send in the firefighter (loads the act2_start snapshot: chain at its posts)
     const onKey = (e: KeyboardEvent) => {
@@ -252,6 +255,18 @@ export default function Dashboard() {
   })
   const summary = useSim((s) => s.summary)
   const [summaryHidden, setSummaryHidden] = useState<SummaryMsg | null>(null)
+  const summaryOpen = !!summary && summaryHidden !== summary
+  useEffect(() => {
+    // while the summary card is open: G = run Act 2 again, R = restart Act 1
+    if (!summaryOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey || document.pointerLockElement) return
+      if (e.key === 'g' || e.key === 'G') sendAct2()
+      else if (e.key === 'r' || e.key === 'R') restartAct1()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [summaryOpen, sendAct2, restartAct1])
 
   return (
     <div className="dash">
@@ -265,7 +280,7 @@ export default function Dashboard() {
           Send in firefighter <kbd>G</kbd>
         </button>
       )}
-      {summary && summaryHidden !== summary && (
+      {summary && summaryOpen && (
         <div className="summary-card">
           <h2>Mission complete</h2>
           <dl>
@@ -280,9 +295,17 @@ export default function Dashboard() {
             <dt>Re-plans</dt>
             <dd>{summary.replans}</dd>
           </dl>
-          <button className="btn" onClick={() => setSummaryHidden(summary)}>
-            Close
-          </button>
+          <div className="summary-actions">
+            <button className="btn summary-primary" onClick={sendAct2} title="Run Act 2 again (G)">
+              Run Act 2 again <kbd>G</kbd>
+            </button>
+            <button className="btn" onClick={restartAct1} title="Restart Act 1 (R)">
+              Restart Act 1 <kbd>R</kbd>
+            </button>
+            <button className="btn" onClick={() => setSummaryHidden(summary)}>
+              Close
+            </button>
+          </div>
         </div>
       )}
 

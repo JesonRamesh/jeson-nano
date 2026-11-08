@@ -995,6 +995,10 @@ kbd {
 .summary-card dt { color: var(--dim); font-size: 14px; }
 .summary-card dd { margin: 0; font: 500 15px/1.2 var(--mono); text-align: right; }
 .summary-card .btn { width: 100%; text-transform: none; letter-spacing: 0.04em; }
+.summary-actions { display: grid; gap: 8px; }
+.summary-actions .btn { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.summary-actions .summary-primary { border-color: rgba(240, 178, 59, 0.55); }
+.summary-actions .summary-primary:hover { background: rgba(240, 178, 59, 0.12); }
 
 /* ================================================================== Gemini / Gemma
    The spark marks Gemma's output; it pulses while Gemma is thinking. The flare is a quiet,
