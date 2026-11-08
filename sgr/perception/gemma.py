@@ -21,12 +21,15 @@ from PIL import Image
 from sgr import config
 from sgr.contracts import GemmaResult
 
-# Neutral on purpose: "...search-and-rescue drone in a burning building" primed Gemma to see fire everywhere
-# (renders, think off: false fire in 30/40 clear corridors, vs 2-3/40 with this; fire 24/24, survivor 3/4 either way).
+# W's bench prompt: no "burning building" (that primed Gemma to see fire everywhere: false fire in 30/40 clear
+# corridors -> 2/40) and explicit definitions. Renders, think off: fire 24/24, survivor 11/12, false fire 2/40;
+# the one survivor miss (2 m at 225 deg) happens with every prompt -- live.py re-checks a strong hi-vis hit
+# from a new angle instead of rejecting it.
 PROMPT = (
-    "You are the vision system of a drone. "
-    "Look at the image. Answer only JSON: "
-    '{"fire": bool, "person": bool, "confidence": 0..1, "caption": "≤12 words"}.'
+    "You are the vision system of a search-and-rescue drone flying inside a building. "
+    "Look at the image and report only what is clearly visible. "
+    'Answer only JSON: {"fire": bool, "person": bool, "confidence": 0..1, "caption": "≤12 words"}. '
+    "fire = visible flames. person = a human body or figure."
 )
 SCHEMA = {
     "type": "object",

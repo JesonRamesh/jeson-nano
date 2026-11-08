@@ -121,7 +121,9 @@ def _firefighter() -> str:
 <joint name="FF_y" type="slide" axis="0 1 0"/>
 <joint name="FF_yaw" type="hinge" axis="0 0 1"/>
 <geom name="FF_body" type="capsule" fromto="0 0 {r} 0 0 {FF_HEIGHT - r}" size="{r}" mass="{FF_MASS}"
-      rgba="{shapes.rgba(FF_RGBA)}" group="2" contype="2" conaffinity="1" condim="1" priority="1"/>
+      rgba="{shapes.rgba(FF_RGBA)}" group="{3 if shapes.ff_model_parts() else 2}" contype="2" conaffinity="1"
+      condim="1" priority="1"/>
+{shapes.ff_model_geoms("FF")}
 </body>"""
 
 
