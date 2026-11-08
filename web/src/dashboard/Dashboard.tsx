@@ -8,6 +8,7 @@ import { Toasts } from '../ui/Toasts'
 import { Banners } from './Banners'
 import { DronePanel, type DronePanelHandle } from './DronePanel'
 import { NetworkGraph } from './NetworkGraph'
+import { GeminiFlare } from '../ui/GeminiFlare'
 import { TracePanel } from './TracePanel'
 import './dashboard.css'
 
@@ -296,6 +297,7 @@ export default function Dashboard() {
         )}
         <Tile {...tileProps(MAP_TILE, 0, '3D map')}>
           <Scene3D send={send} />
+          <GeminiFlare />
         </Tile>
         {act === 1 && drones.map((d, i) => (
           <Tile key={d.id} {...tileProps(d.id, i + 1, `${d.id} camera`)}>
