@@ -12,7 +12,9 @@ Optional constructor arguments (additive to the §4 stub):
 Rules (§9), highest priority first:
   complete       within 1.5 m of the confirmed survivor     -> "Survivor reached. Mission complete."
   fire           inside a fire cell                         -> push_ff_back + "Stop. Fire ahead. Turn back."
-  danger         within 1.0 m of fire, or in a danger cell  -> alarm, "Stop. Fire ahead. Turn back."
+  danger         within 1.0 m of fire, or in a danger cell off the route -> alarm, "Stop. Fire ahead. Turn back."
+  heat           in a danger cell ON the swarm's route (heat is a route cost, not a wall: spec 8.3)
+                                                            -> "Heat on the route. Keep moving."
   no route       route.status == "none"                     -> "No safe route. Holding."
   route blocked  route re-planning / replaced under the FF  -> "Stop. Route blocked." then "New route. Follow me."
   wrong way      off-route edge or heading >120 deg off the next checkpoint, for > 2 s
@@ -80,12 +82,12 @@ URGENT_GAP_S = 4.0  # fire / turn warnings may follow another line this soon (ot
 TURN_CALLOUT_M = (3.0, 8.0)  # announce a corner this far ahead along the route
 TURN_MIN_DEG = 50.0
 DISTANCE_EVERY_M = 20.0  # "40 metres to go." every 20 m (more than 12 m out)
-QUIET_KEYS = {"fire", "danger", "blocked", "noroute", "wrong", "complete"}  # the HUD voice has the floor
+QUIET_KEYS = {"fire", "danger", "heat", "blocked", "noroute", "wrong", "complete"}  # the HUD voice has the floor
 # every fixed HUD line (GuidanceMsg.say); in online mode they are voiced by Gemini, pre-generated at startup
 HUD_LINES = ["Survivor reached. Mission complete.", "Stop. Fire ahead. Turn back.", "No safe route. Holding.",
              "Stop. Route blocked.", "New route. Follow me.", "Waiting for a safe route.", "Wrong way. Turn around.",
              "Bear right.", "Bear left.", "Follow me.", "Your drone is coming back to you. Follow the arrow.",
-             "Follow the drone."]
+             "Follow the drone.", "Survivor ahead.", "Heat on the route. Keep moving."]
 
 
 def route_of(swarm: SwarmState) -> list:
@@ -149,6 +151,7 @@ class Guidance:
         ids = ["D1", "D2", "D3", "D4"]
         out = [("HUD", t) for t in HUD_LINES]
         out += [(d, f"{d} here, taking over from {o}. Follow me.") for d in ids for o in ids if o != d]
+        out += [(d, f"{d} here, I'm with the survivor. Nearly there.") for d in ids]
         out += [(d, "Waiting for you. Walk to my light.") for d in ids]
         out += [(d, "Coming back for you. Follow the arrow.") for d in ids]
         return out
@@ -157,7 +160,7 @@ class Guidance:
         self._cl_last = -math.inf
         self._cl_intro = False
         self._cl_lead: str | None = None
-        self._cl_fires: dict[tuple[int, int], float] = {}
+        self._cl_fires: list[tuple[Pt, float]] = []  # (where, when) fires were announced
         self._cl_survivor = False
         self._cl_total: float | None = None
         self._cl_marks: set[str] = set()
@@ -242,7 +245,7 @@ class Guidance:
         self._key = key
         if say is not None and self.callouts_on and self.voice is not None and self.voice_online:
             # online: the HUD line is voiced by Gemini too (pre-generated: instant), so all voices match
-            spoken = "Follow the drone." if key == "go" else say  # the distance is on screen
+            spoken = {"go": "Follow the drone.", "near": "Survivor ahead."}.get(key, say)  # distances are on screen
             self.voice.submit(Callout("HUD", "hud", spoken, severity=sev))
         if self.callouts_on:
             self._callouts(t, ff, p, swarm, proj, key, remaining)
@@ -278,8 +281,12 @@ class Guidance:
             return
         # handover: one short line from the new lead (it breaks the gap: the FF must know who to follow)
         if self._cl_lead is not None and lead != self._cl_lead and key not in ("fire", "danger"):
-            self._say(Callout(lead, "handover", f"{lead} here, taking over from {self._cl_lead}. Follow me.",
-                              {"from": self._cl_lead, "to": lead}), t)
+            if self._at_survivor(swarm, lead):  # the last drone waits with the survivor: nothing left to follow
+                self._say(Callout(lead, "handover", f"{lead} here, I'm with the survivor. Nearly there.",
+                                  {"from": self._cl_lead, "to": lead}), t)
+            else:
+                self._say(Callout(lead, "handover", f"{lead} here, taking over from {self._cl_lead}. Follow me.",
+                                  {"from": self._cl_lead, "to": lead}), t)
         self._cl_lead = lead
         if key == "follow":
             self._cl_wait_since = self._cl_wait_since if self._cl_wait_since is not None else t
@@ -306,7 +313,7 @@ class Guidance:
             return
         c = self._fire_callout(t, ff, p, swarm) or self._turn_callout(route_of(swarm), proj)  # urgent: 4 s gap
         if c is None and since >= CALLOUT_GAP_S:
-            c = self._survivor_callout(p, swarm) or self._progress_callout(remaining)
+            c = self._progress_callout(remaining)
         waited = self._cl_wait_since is not None and t - self._cl_wait_since >= LEAD_WAIT_CALLOUT_S
         if c is None and waited and not self._cl_wait_said and since >= CALLOUT_GAP_S:
             self._cl_wait_said = True
@@ -323,8 +330,7 @@ class Guidance:
         if not FIRE_MARGIN_M + 0.3 < dist <= FIRE_CALLOUT_M:
             return None
         f = (float(self._fire_xy[k, 0]), float(self._fire_xy[k, 1]))
-        cluster = (round(f[0] / 3.0), round(f[1] / 3.0))
-        if t - self._cl_fires.get(cluster, -math.inf) < FIRE_CALLOUT_AGAIN_S:
+        if any(math.dist(f, q) < 3.0 and t - when < FIRE_CALLOUT_AGAIN_S for q, when in self._cl_fires):
             return None
         rel = math.degrees(wrap(bearing(p, f) - ff.yaw))
         if abs(rel) <= 35:
@@ -335,11 +341,19 @@ class Guidance:
             side = "right"
         else:
             return None  # behind: not worth a warning
-        self._cl_fires[cluster] = t
+        self._cl_fires.append((f, t))
         metres = max(1, round(dist))
         text = f"Fire ahead, {metres} metres. Stay with me." if side == "ahead" else f"Fire on your {side}, {metres} metres."
         return Callout(self._nearest_drone(swarm, f) or self.lead, "fire_side", text,
                        {"side": side, "distance_m": metres}, severity="warn")
+
+    @staticmethod
+    def _at_survivor(swarm: SwarmState, drone: str) -> bool:
+        """This drone's chain post is at the confirmed survivor (the survivor drone)."""
+        sv = swarm.survivor
+        if not sv or sv.status != "confirmed" or sv.x is None or sv.y is None:
+            return False
+        return any(c.drone == drone and math.dist((c.x, c.y), (sv.x, sv.y)) <= 3.0 for c in swarm.checkpoints)
 
     def _turn_callout(self, route, proj) -> Callout | None:
         """The next corner 3-8 m ahead along the route (heading change > 50 deg over 3 m): "Left turn in 5 metres."
@@ -417,7 +431,13 @@ class Guidance:
             if self.world is not None and hasattr(self.world, "push_ff_back"):
                 self.world.push_ff_back()
             return "fire", "Stop. Fire ahead. Turn back.", "danger", True
-        if fd <= FIRE_MARGIN_M or self._in_danger_cell(p):
+        if fd <= FIRE_MARGIN_M:
+            return "danger", "Stop. Fire ahead. Turn back.", "danger", True
+        if self._in_danger_cell(p):
+            # heat the drones felt. The swarm's firefighter route treats heat as a cost, not a wall (spec 8.3),
+            # so on its route this is the best way through: keep moving. Off the route: stop.
+            if proj is not None and proj.dist <= EDGE_ON_ROUTE_M:
+                return "heat", "Heat on the route. Keep moving.", "warn", False
             return "danger", "Stop. Fire ahead. Turn back.", "danger", True
         if status == "none":
             return "noroute", "No safe route. Holding.", "warn", False
@@ -442,6 +462,10 @@ class Guidance:
             # the route is on the opposite side of the FF's offset
             return ("drift", "Bear right." if proj.side > 0 else "Bear left.", "warn", False)
 
+        sv = swarm.survivor
+        if sv and sv.status == "confirmed" and sv.x is not None and sv.y is not None \
+                and math.dist(p, (sv.x, sv.y)) <= SURVIVOR_CALLOUT_M:
+            return "near", f"Survivor ahead. {max(2, round(math.dist(p, (sv.x, sv.y))))} metres.", "info", False
         if lead_state == "return":
             return "returning", "Your drone is coming back to you. Follow the arrow.", "info", False
         if lead_state == "wait":
@@ -484,10 +508,15 @@ class Guidance:
         return not all(project(route, s).dist <= EDGE_ON_ROUTE_M for s in samples)
 
     def _heading_wrong(self, ff: Pose, swarm: SwarmState, route, proj) -> bool:
-        nxt = self._next_checkpoint(swarm, route, proj) or route[-1]
-        if math.dist((ff.x, ff.y), nxt) < 1.0:
+        """Facing more than 120 deg away from where the arrow points (the route just ahead).
+
+        Not the straight line to the next checkpoint: with 1-2 drones left the next checkpoint is the survivor,
+        and the bearing to it through the walls says nothing about the corridor the firefighter is in."""
+        p = (ff.x, ff.y)
+        tgt = self._target(route, proj, p)
+        if tgt is None or math.dist(p, tgt) < 0.5:
             return False
-        return abs(wrap(bearing((ff.x, ff.y), nxt) - ff.yaw)) > WRONG_HEADING
+        return abs(wrap(bearing(p, tgt) - ff.yaw)) > WRONG_HEADING
 
     # ---------------------------------------------------------------- lead / chain
     def _chain_drones(self, swarm: SwarmState) -> list[str]:

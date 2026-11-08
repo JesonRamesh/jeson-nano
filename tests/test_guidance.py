@@ -306,3 +306,20 @@ def test_far_lead_flies_back_to_the_firefighter():
     assert not any(s.startswith("Follow me") for s in subs)  # never "waits" 20 m away
     assert any(s.startswith("Follow the drone") for s in subs)  # then leads as usual
     assert said[0] == "intro" and "lead_wait" not in said
+
+
+# ------------------------------------------------------------------ heat the drones felt (danger cells)
+def test_heat_on_the_route_keeps_the_firefighter_moving():
+    """The swarm's route treats heat as a cost, not a wall: on that route a danger cell means keep going.
+    (Regression: with 2 drones left the route crossed a hot strip and the firefighter was told to stop forever.)"""
+    g = Guidance(world=StubWorld({"D1": (12, 3), "D2": (16, 3)}))
+    heat = [(i, j, "danger") for i in range(40, 46) for j in range(13, 18)]  # x 8-9.2, y 2.6-3.6: on the route
+    m, _ = g.tick(0.0, Pose(x=8.5, y=3.0, yaw=0.0), _swarm(delta=heat))
+    assert m.subtitle == "Heat on the route. Keep moving." and m.severity == "warn" and not m.alarm
+
+
+def test_danger_cell_off_the_route_still_stops():
+    g = Guidance(world=StubWorld({"D1": (12, 3), "D2": (16, 3)}))
+    heat = [(i, j, "danger") for i in range(40, 46) for j in range(28, 33)]  # y 5.6-6.6: 3 m off the route
+    m, _ = g.tick(0.0, Pose(x=8.5, y=6.0, yaw=0.0), _swarm(delta=heat))
+    assert m.subtitle == "Stop. Fire ahead. Turn back." and m.alarm
