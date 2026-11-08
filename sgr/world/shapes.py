@@ -210,7 +210,7 @@ def fire_particle_params():
     return flames, embers
 
 
-FIRE_LOOK =os.environ.get("SGR_FIRE_LOOK", "flames").lower()  # "flames" | "cones" (the old look)
+FIRE_LOOK = os.environ.get("SGR_FIRE_LOOK", "realistic").lower()  # "realistic" (firefx.py) | "flames" | "cones"
 
 
 def _flame_geoms(prefix: str) -> str:

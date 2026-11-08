@@ -147,6 +147,19 @@ class World:
             fx["core"] = np.array([g for g in self._fire_geoms[i] if m.geom(g).name.split("_")[-1].startswith(("c", "embers"))], int)
             self._fire_fx.append(fx)
         self._fire_params = shapes.fire_particle_params()
+        # W's 3D-view fire (firefx.py) is composited onto the drone frames. The old fire geoms stay exactly as
+        # they were (group 1, animated, hit by pixel_to_world rays so fire positions are unchanged); they are
+        # only made transparent while a drone camera renders.
+        self._firefx = None
+        if shapes.FIRE_LOOK == "realistic":
+            from .firefx import FireCompositor
+
+            self._firefx = FireCompositor()
+            for i in range(mjcf.N_FIRE):  # the flat embers disc becomes a ray target the size of the drawn flames,
+                e = m.geom(f"fire{i:02d}_embers").id  # so a fire pixel's world ray stops at the fire, not the wall behind
+                m.geom_size[e, :2] = (0.6, 0.95)  # cylinder radius, half-height (firefx flames at size 1.5)
+                m.geom_pos[e, 2] = 0.95
+        self._fire_all = np.concatenate(self._fire_geoms) if self._fire_geoms else np.zeros(0, int)
         self._survivor_xy = (scenario.survivor.x, scenario.survivor.y)
 
         # runtime state (pickled with snapshots)
@@ -335,7 +348,28 @@ class World:
         r.update_scene(self.data, camera=self._d[drone]["cam"], scene_option=self._scene_opt)
         r.scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = 0
         r.scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 0
-        return r.render().copy(), info
+        if self._firefx is None:
+            return r.render().copy(), info
+        fires = [(p.handle.x, p.handle.y, p.size) for p in self._placed.values() if p.handle.kind == "fire"]
+        if not fires:
+            return r.render().copy(), info
+        m, g = self.model, self._fire_all
+        alpha = m.geom_rgba[g, 3].copy()
+        m.geom_rgba[g, 3] = 0.0  # hide the geom fire for this render only (the compositor draws it)
+        try:
+            r.update_scene(self.data, camera=self._d[drone]["cam"], scene_option=self._scene_opt)
+            frame = r.render().copy()
+            r.enable_depth_rendering()
+            try:
+                depth = r.render().copy()
+            finally:
+                r.disable_depth_rendering()
+        finally:
+            m.geom_rgba[g, 3] = alpha
+        cid = self._d[drone]["cam"]
+        frame = self._firefx.apply(frame, depth, self.data.cam_xpos[cid], self.data.cam_xmat[cid], fires,
+                                   float(self.data.time))
+        return frame, info
 
     def dashboard_frame(self, drone: str, frame: np.ndarray) -> np.ndarray:
         """The copy of a drone frame shown on the dashboard: smoke fog by depth, like the firefighter view
