@@ -371,3 +371,48 @@ def test_dashboard_frame_fogs_a_copy_only(world):
     assert depth.shape == img.shape[:2] and depth.min() > 0
     world.kill_drone("D2")
     assert world.render_depth("D2") is None  # dead: static, not fogged
+
+
+# ------------------------------------------------------------------ the firefighter figure (dashboard only)
+def test_ff_figure_is_visual_only_and_never_in_perception(map_dir, monkeypatch):
+    """W's firefighter.glb rides on the FF body: no mass (physics identical), and only in its own render group,
+    so the perception frame never contains it (its hi-vis stripes are in the detector's 'person' range)."""
+    from sgr.world import shapes
+
+    if not shapes.ff_model_parts():
+        pytest.skip("firefighter.glb not available in this checkout")
+    w = World(map_dir, Scenario.load(map_dir), scan_vis=False)
+    m = w.model
+    b = m.body("FF").id
+    fig = [g for g in range(m.ngeom) if m.geom_bodyid[g] == b and m.geom(g).name.startswith("FF_m_")]
+    assert len(fig) == len(shapes.ff_model_parts())
+    assert all(m.geom_group[g] == shapes.FF_FIGURE_GROUP and m.geom_contype[g] == 0 for g in fig)
+    from sgr.world.world import RENDER_GROUPS
+
+    assert RENDER_GROUPS[shapes.FF_FIGURE_GROUP] == 0  # the drone (perception) render never draws it
+    assert m.geom_group[m.geom("FF_body").id] == 3  # the collision capsule is hidden too (no more blob)
+    monkeypatch.setattr(shapes, "ff_model_parts", lambda: ())
+    plain = World(map_dir, Scenario.load(map_dir), scan_vis=False)
+    pb = plain.model.body("FF").id
+    assert m.body_mass[b] == pytest.approx(plain.model.body_mass[pb])
+    assert np.allclose(m.body_inertia[b], plain.model.body_inertia[pb])
+
+
+@needs_gl
+def test_ff_figure_shows_on_the_dashboard_once_steered(world):
+    from sgr.world import shapes
+
+    if not shapes.ff_model_parts():
+        pytest.skip("firefighter.glb not available in this checkout")
+    f = world.ff_pose()
+    world.teleport_drone("D1", f.x + 3.0, f.y, math.pi)  # 3 m in front of the firefighter, looking at it
+    world.step(2)
+    img, _ = world.render_drone("D1")
+    before = world.dashboard_frame("D1", img)
+    world.set_ff_input(0.0, 0.0, 0.0)  # Act 2: being steered
+    img2, _ = world.render_drone("D1")
+    after = world.dashboard_frame("D1", img2)
+    assert np.abs(img.astype(int) - img2).mean() < 1.0  # perception: unchanged
+    assert np.abs(after.astype(int) - before).mean() > 0.3  # dashboard: the figure is drawn
+    world.set_state(world.get_state())  # a snapshot load (new act): hidden until steered again
+    assert not world._ff_figure_in_view("D1")

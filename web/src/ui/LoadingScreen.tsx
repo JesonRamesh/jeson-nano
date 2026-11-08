@@ -17,7 +17,8 @@ import { sim, useSim } from '../state/store'
 // it launches, so on a fresh run we Restart Act 1 (`reset` = the act1_start snapshot, t = 0), let it
 // tick for WARM_S so every drone camera has sent a frame, then `pause`. Start sends `start`.
 // If the page opens on a run that is already well under way (a browser refresh mid-demo), the run
-// is only paused, not restarted, and the button says Resume.
+// is only paused, not restarted, and the button says Resume, with Restart mission (R) beside it:
+// that restarts Act 1 (`reset`), waits for the fresh run's hello, then starts it.
 
 const MIN_MS = 2200 // show long enough to register, even on a warm reload
 const SETTLE_MS = 1200 // after everything has loaded
@@ -35,7 +36,7 @@ const TRAIL = 9 // liquid blobs following the drone
 const LAP_S = 5.6 // one lap of the spark
 const LAG_S = 0.1 // each blob trails the one before by this much
 
-type Phase = 'loading' | 'arming' | 'armed' | 'leaving' | 'gone'
+type Phase = 'loading' | 'arming' | 'armed' | 'restarting' | 'leaving' | 'gone'
 
 export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
   const hello = useSim((s) => s.hello)
@@ -97,10 +98,31 @@ export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
     setPhase('leaving')
   }
 
-  // Enter / Space = Start
+  // restarting: Act 1 from the beginning (act1_start snapshot), then run it once the fresh run is
+  // in. The server drops commands queued behind a snapshot load, so `start` waits for the new hello.
+  useEffect(() => {
+    if (phase !== 'restarting') return
+    const hello0 = sim.snap.hello
+    const t0 = performance.now()
+    send({ type: 'control', action: 'reset' })
+    const iv = setInterval(() => {
+      if (sim.snap.hello !== hello0 || performance.now() - t0 > ARM_TIMEOUT_MS) {
+        clearInterval(iv)
+        go()
+      }
+    }, 40)
+    return () => clearInterval(iv)
+  }, [phase]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Enter / Space = Start (or Resume); R = Restart, when the run was paused mid-way
   useEffect(() => {
     if (phase !== 'armed') return
     const onKey = (e: KeyboardEvent) => {
+      if (resume && (e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault()
+        setPhase('restarting')
+        return
+      }
       if (e.key !== 'Enter' && e.key !== ' ') return
       e.preventDefault()
       go()
@@ -135,14 +157,22 @@ export function LoadingScreen({ send }: { send: (m: ClientMsg) => void }) {
       <div className={`intro ${phase === 'leaving' ? 'leaving' : ''}`}>
         <IntroScene />
         <div className="intro-vignette" />
-        {(armed || phase === 'leaving') && (
+        {(armed || phase === 'restarting' || phase === 'leaving') && (
           <div className="intro-ui">
             <div className="intro-kicker">Swarm-Guided Rescue</div>
             <div className="intro-title">{resume ? 'Mission paused' : 'Four drones go in first. You follow.'}</div>
-            <button className="loading-start" onClick={go} autoFocus disabled={phase === 'leaving'}>
-              <span>{resume ? 'Resume mission' : 'Start mission'}</span>
-              <kbd>Enter</kbd>
-            </button>
+            <div className="intro-actions">
+              <button className="loading-start" onClick={go} autoFocus disabled={!armed}>
+                <span>{resume ? 'Resume mission' : 'Start mission'}</span>
+                <kbd>Enter</kbd>
+              </button>
+              {resume && (
+                <button className="loading-restart" onClick={() => setPhase('restarting')} disabled={!armed} title="Restart the mission from Act 1">
+                  <span>{phase === 'restarting' ? 'Restarting…' : 'Restart mission'}</span>
+                  <kbd>R</kbd>
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

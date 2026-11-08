@@ -1160,30 +1160,39 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   .feed-det::before { animation: none; }
 }
-/* Experimental (W): "Fail" button on each camera tile -- the drone loses its signal */
+/* Experimental (W): fail button on each camera tile -- the drone loses its signal. A round stop
+   icon beside the temperature, so it reads as a control rather than a "FAIL" status. */
 .feed-fail {
-  margin-left: auto;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   pointer-events: auto; /* .feed-top lets clicks through to the tile; the button must catch them */
-  font: inherit;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #ffb4a8;
-  background: rgba(120, 20, 10, 0.45);
-  border: 1px solid rgba(255, 120, 100, 0.45);
+  color: #ff7a6b;
+  background: rgba(8, 10, 13, 0.38);
+  border: 1px solid rgba(255, 120, 100, 0.4);
   backdrop-filter: blur(12px) saturate(150%);
-  border-radius: 7px;
-  padding: 3px 9px;
+  border-radius: 50%;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   cursor: pointer;
+  transition:
+    background 0.15s var(--ease),
+    color 0.15s var(--ease),
+    transform 0.15s var(--ease);
 }
 .feed-fail:hover:not(:disabled) {
-  background: rgba(170, 30, 15, 0.7);
+  background: rgba(200, 40, 25, 0.85);
+  border-color: rgba(255, 140, 120, 0.8);
   color: #fff;
+  transform: scale(1.08);
 }
 .feed-fail:disabled {
   opacity: 0.35;
   cursor: not-allowed;
 }
+.tile-rail .feed-fail { width: 24px; height: 24px; }
 
 /* ------------------------------------------------------------------ global full-screen button
    Pinned to the window's top-right corner, the same in every act and focus state. The tile whose
