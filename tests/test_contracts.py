@@ -115,6 +115,7 @@ EXAMPLES: dict[type[BaseModel], BaseModel] = {
     c.SnapshotMsg: c.SnapshotMsg(op="save", name="act2_start"),
     c.FFInputMsg: c.FFInputMsg(fwd=1.0, strafe=-0.5, yaw=1.57),
     c.VoiceModeMsg: c.VoiceModeMsg(mode="offline"),
+    c.FailDroneMsg: c.FailDroneMsg(drone="D2"),
     # swarm
     c.SwarmDrone: c.SwarmDrone(id="D1", status="EXPLORING", task="area n4"),
     c.SwarmState: c.SwarmState(
@@ -129,7 +130,7 @@ EXAMPLES: dict[type[BaseModel], BaseModel] = {
 }
 
 SERVER_TYPES = [c.HelloMsg, c.StateMsg, c.MapDeltaMsg, c.TraceMsg, c.DetectionMsg, c.EventMsg, c.GuidanceMsg, c.BudgetMsg, c.SummaryMsg, c.CalloutMsg]
-CLIENT_TYPES = [c.ClickMsg, c.UndoMsg, c.ControlMsg, c.Act2StartMsg, c.SnapshotMsg, c.FFInputMsg, c.VoiceModeMsg]
+CLIENT_TYPES = [c.ClickMsg, c.UndoMsg, c.ControlMsg, c.Act2StartMsg, c.SnapshotMsg, c.FFInputMsg, c.VoiceModeMsg, c.FailDroneMsg]
 
 
 def _contract_models() -> set[type[BaseModel]]:
@@ -141,7 +142,7 @@ def _contract_models() -> set[type[BaseModel]]:
 
 
 def test_contract_version() -> None:
-    assert c.CONTRACT_VERSION == 4
+    assert c.CONTRACT_VERSION == 5
 
 
 def test_every_model_has_an_example() -> None:

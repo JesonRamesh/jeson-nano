@@ -57,6 +57,7 @@ from sgr.contracts import (  # noqa: E402
     ClickMsg,
     ControlMsg,
     EventMsg,
+    FailDroneMsg,
     FFInputMsg,
     GuidanceMsg,
     PriorMap,
@@ -280,6 +281,18 @@ class Replay:
             note = f"{step.get('mode', 'debris')} at ({x:.1f}, {y:.1f})"
             self.happened.pop("click_noticed", None)  # this click's reaction, not the last one's
             self._click = {"t": t, "x": float(x), "y": float(y), "n": len(self.loop.click_stack), "checked": False}
+        elif do == "fail":  # experimental (W): the presenter fails a drone
+            d = step.get("drone", "auto")
+            if d == "auto":
+                alive = [x for x in self.loop.scenario.drones.ids if x not in self.loop.dead]
+                ss = self.loop.swarm_state
+                info = {sd.id: sd for sd in (ss.drones if ss else [])}
+                # prefer a drone that isn't over the survivor or leading; else anyone (the sim keeps the last one)
+                plain = [x for x in alive if not (info.get(x) and (info[x].task.startswith("over the survivor")
+                                                                   or info[x].task.startswith("lead")))]
+                d = (plain or alive)[0] if alive else "D1"
+            bus.send_command(FailDroneMsg(drone=d))
+            note = d
         elif do == "undo":
             bus.send_command(UndoMsg())
         elif do == "act2":

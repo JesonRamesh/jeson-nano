@@ -180,3 +180,41 @@ def test_a_drone_always_fails_signal_loss_when_no_flare_up_is_safe(test_map) -> 
     assert len(world.ground_truth().fires) == fires_before  # signal loss places no fire
     lost = [r for r in loop.trace if r.action == "DRONE_LOST"]
     assert len(lost) == 1 and lost[0].drone == loop.signal_lost and lost[0].evidence.sensor == "heartbeat"
+
+
+# ---- experimental (W): the presenter fails chosen drones; up to all-but-one, never the last ----
+
+
+def test_presenter_can_fail_drones_but_never_the_last(test_map) -> None:
+    from sgr.bus import Bus
+    from sgr.contracts import FailDroneMsg
+
+    sc = Scenario.load(test_map)
+    sc.flare = None  # presenter failures only
+    world = FakeWorld(test_map, sc)
+    bus = Bus()
+    loop = SimLoop(world, Perception(mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight),
+                   Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids)), sc, bus=bus, render=False, realtime=False)
+    loop.run(max_ticks=50)
+    for d in ("D1", "D2", "D3", "D4"):
+        bus.send_command(FailDroneMsg(drone=d))
+    loop.run(max_ticks=100)
+    assert loop.dead == {"D1", "D2", "D3"}  # the 4th request was refused: D4 still flies
+    assert not loop.fail_drone("D1")  # already failed: refused
+    lost = {r.drone for r in loop.trace if r.action == "DRONE_LOST"}
+    assert lost == {"D1", "D2", "D3"}  # the swarm noticed each one by its silent heartbeat
+
+
+def test_last_drone_alone_still_finds_the_survivor_and_leads(test_map) -> None:
+    sc = Scenario.load(test_map)
+    world = FakeWorld(test_map, sc)
+    loop = SimLoop(world, Perception(mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight),
+                   Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids)), sc, render=False, realtime=False)
+    loop.run(max_ticks=100)  # 10 s
+    for d in ("D1", "D2", "D3"):
+        loop.fail_drone(d)
+    loop.run(max_ticks=2500)
+    actions = [r.action for r in loop.trace]
+    assert "SURVIVOR_CONFIRMED" in actions
+    assert loop.swarm.rescue.roles == {"D4": "lead"}  # alone: it leads the firefighter in itself
+    assert loop.swarm.rescue.watcher is None  # never stuck watching a fire as the last searcher
