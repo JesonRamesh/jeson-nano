@@ -21,9 +21,10 @@ from typing import Annotated, Any, Literal, Union
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator
 
-CONTRACT_VERSION = 3
+CONTRACT_VERSION = 4
 # v2: Scenario.checkpoints, Checkpoint.node (W's authored checkpoints), SwarmState.relook_requests (§8.4)
 # v3: CalloutMsg (Act 2 drone voices)
+# v4: FailDroneMsg (experimental: the presenter fails a chosen drone; never the last one)
 
 
 class _Base(BaseModel):
@@ -586,8 +587,16 @@ class FFInputMsg(_Base):
     yaw: float  # absolute heading, radians
 
 
+class FailDroneMsg(_Base):
+    """Experimental (W): fail this drone now (it loses its signal: goes dark, stops publishing).
+    The sim refuses if it would leave no drone flying, so at most all-but-one can fail."""
+
+    type: Literal["fail_drone"] = "fail_drone"
+    drone: str
+
+
 ClientMessage = Annotated[
-    Union[ClickMsg, UndoMsg, ControlMsg, Act2StartMsg, SnapshotMsg, FFInputMsg],
+    Union[ClickMsg, UndoMsg, ControlMsg, Act2StartMsg, SnapshotMsg, FFInputMsg, FailDroneMsg],
     Field(discriminator="type"),
 ]
 

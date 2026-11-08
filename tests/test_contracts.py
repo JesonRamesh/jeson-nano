@@ -114,6 +114,7 @@ EXAMPLES: dict[type[BaseModel], BaseModel] = {
     c.Act2StartMsg: c.Act2StartMsg(),
     c.SnapshotMsg: c.SnapshotMsg(op="save", name="act2_start"),
     c.FFInputMsg: c.FFInputMsg(fwd=1.0, strafe=-0.5, yaw=1.57),
+    c.FailDroneMsg: c.FailDroneMsg(drone="D2"),
     # swarm
     c.SwarmDrone: c.SwarmDrone(id="D1", status="EXPLORING", task="area n4"),
     c.SwarmState: c.SwarmState(
@@ -140,7 +141,7 @@ def _contract_models() -> set[type[BaseModel]]:
 
 
 def test_contract_version() -> None:
-    assert c.CONTRACT_VERSION == 3
+    assert c.CONTRACT_VERSION == 4
 
 
 def test_every_model_has_an_example() -> None:

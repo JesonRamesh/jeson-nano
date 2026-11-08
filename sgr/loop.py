@@ -30,6 +30,7 @@ from sgr.contracts import (
     ControlMsg,
     Detection,
     DetectionMsg,
+    FailDroneMsg,
     DroneState,
     FFInputMsg,
     FFState,
@@ -94,7 +95,8 @@ class SimLoop:
         self.flare_fire: Handle | None = None
         self.flare_victim: str | None = None  # the drone that fails in Act 1 (flare-up, or signal loss)
         self.signal_lost: str | None = None  # set when it failed by signal loss instead of the flare-up
-        self._person_seen = False  # any detection of the survivor yet (triggers the failure if it's still due)
+        self._person_seen = False
+        self.manual_failures: list[tuple[float, str]] = []  # (t, drone) failed from the dashboard (experimental)  # any detection of the survivor yet (triggers the failure if it's still due)
         self._frame_seq = 0
         self._cam_rr = 0
         self._last_state_pub = -math.inf
@@ -138,6 +140,9 @@ class SimLoop:
         # 2 timed events: one drone fails during the exploration (§7.4), always BEFORE the survivor is found:
         # at flare.t, or the moment any drone first glimpses the survivor, whichever comes first. A flare-up if
         # a drone is somewhere safe for one, otherwise that drone loses its signal on the spot (no fire placed).
+        if (s.flare and not self._flared and (self.t >= s.flare.t or self._person_seen)
+                and len([d for d in s.drones.ids if d not in self.dead]) <= 1):
+            self._flared = True  # only one drone left (presenter failures): the scripted failure is skipped
         if s.flare and not self._flared and (self.t >= s.flare.t or self._person_seen):
             victim = self._flare_victim(waited=FLARE_MAX_WAIT_S)  # decide now: no more waiting
             if victim == _WAIT:
@@ -286,6 +291,23 @@ class SimLoop:
         print(f"sgr: flare-up skipped: no drone within {FLARE_FALLBACK_M:.0f} m of a fire after {waited:.0f} s")
         return None  # a flare-up far from the fires could cut the only route: skip the beat instead
 
+    def fail_drone(self, drone: str, why: str = "presenter") -> bool:
+        """Experimental (W): this drone loses its signal now -- it goes dark and stops publishing, exactly like
+        the scenario's signal loss; the swarm only notices the missing heartbeat. Refused for an unknown or
+        already-failed drone, and if it would leave no drone flying (all-but-one may fail, never all)."""
+        alive = [d for d in self.scenario.drones.ids if d not in self.dead]
+        if drone not in alive:
+            print(f"sgr: fail {drone} refused: not a flying drone")
+            return False
+        if len(alive) <= 1:
+            print(f"sgr: fail {drone} refused: it is the last drone flying")
+            return False
+        self.world.kill_drone(drone)
+        self.dead.add(drone)
+        self.manual_failures.append((round(self.t, 1), drone))
+        print(f"sgr: {drone} lost its signal at t={self.t:.1f}s ({why})")
+        return True
+
     def _signal_loss_victim(self) -> str | None:
         """Which drone loses its signal when no flare-up is possible: one whose loss shows the swarm adapting
         without wasting a key role -- the fire watcher, else an explorer, else a checkpoint drone; never the
@@ -379,6 +401,9 @@ class SimLoop:
                     self._save(msg.name)
                 elif self._load(msg.name):
                     return True
+                continue
+            if isinstance(msg, FailDroneMsg):
+                self.fail_drone(msg.drone, why="presenter")
                 continue
             if isinstance(msg, ControlMsg) and msg.action == "reset":
                 if self._load("act1_start", act=1):
