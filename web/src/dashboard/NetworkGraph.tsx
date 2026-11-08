@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import type { HelloMsg } from '../contracts'
 import { sim } from '../state/store'
 
 // Live link graph: where the drones are and how they connect back to the base, drawn like a
@@ -7,6 +8,11 @@ import { sim } from '../state/store'
 // (the entrance): every drone hangs off its nearest neighbour that is already connected
 // (Prim's minimum spanning tree). A lost drone turns grey and drops out of the tree.
 // This is a visual model of a mesh, not a simulated radio (the sim has no radio limits).
+//
+// The roads are not shown up front: they are revealed as the swarm maps the floor. A stretch
+// of road appears once its cell is in the swarm's searched mask (map_delta) or a live drone has
+// been next to it, so the network grows out from BASE behind the drones, in real time. Fresh
+// stretches glow, then settle into the road colour. The searched area itself is a faint wash.
 
 type Pt = [number, number]
 
@@ -18,10 +24,16 @@ interface View {
 
 const TRAIL_MAX = 160 // samples per drone
 const TRAIL_STEP_M = 0.35 // record a trail point after moving this far
+const ROAD_STEP_M = 0.2 // road reveal resolution (= belief cell)
+const REVEAL_NEAR_M = 1.2 // a live drone this close reveals the road even before the searched mask says so
+const FADE_MS = 900 // fresh road glow -> settled road
+const EXPLORED_REBUILD_MS = 200 // repaint the explored wash at most this often
 
 const C = {
-  road: 'rgba(213, 218, 224, 0.10)',
-  roadNode: 'rgba(213, 218, 224, 0.22)',
+  road: 'rgba(213, 218, 224, 0.16)',
+  roadNode: 'rgba(213, 218, 224, 0.30)',
+  fresh: [140, 230, 255] as const, // rgb of a just-mapped road stretch
+  explored: [213, 218, 224, 14] as const, // rgba (0-255) of a searched cell
   grid: 'rgba(213, 218, 224, 0.045)',
   route: 'rgba(240, 178, 59, 0.75)',
   trail: 'rgba(213, 218, 224, 0.20)',
@@ -30,6 +42,105 @@ const C = {
   lost: '#5a626d',
   label: 'rgba(213, 218, 224, 0.85)',
   dim: 'rgba(133, 144, 160, 0.9)',
+}
+
+interface RoadEdge {
+  a: Pt
+  b: Pt
+  n: number // samples, ends included
+  t: Float64Array // per sample: performance.now() when revealed, 0 = not yet
+}
+
+/** What the swarm has mapped so far: road samples + nodes, revealed over time. Per session. */
+interface Discovery {
+  hello: HelloMsg
+  edges: RoadEdge[]
+  nodes: { p: Pt; t: number }[]
+  samples: number
+  revealed: number
+  beliefVer: number
+  explored: HTMLCanvasElement | null
+  exploredVer: number
+  exploredAt: number
+}
+
+function newDiscovery(hello: HelloMsg): Discovery {
+  const xy = new Map(hello.graph.nodes.map((n) => [n.id, [n.x, n.y] as Pt]))
+  const edges: RoadEdge[] = []
+  let samples = 0
+  for (const e of hello.graph.edges) {
+    const a = xy.get(e.a)
+    const b = xy.get(e.b)
+    if (!a || !b) continue
+    const n = Math.max(2, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / ROAD_STEP_M) + 1)
+    edges.push({ a, b, n, t: new Float64Array(n) })
+    samples += n
+  }
+  return {
+    hello,
+    edges,
+    nodes: hello.graph.nodes.map((n) => ({ p: [n.x, n.y] as Pt, t: 0 })),
+    samples,
+    revealed: 0,
+    beliefVer: -1,
+    explored: null,
+    exploredVer: -1,
+    exploredAt: 0,
+  }
+}
+
+/** Reveal road samples / nodes the swarm has searched, or that a live drone is next to. */
+function updateDiscovery(d: Discovery, drones: Pt[], now: number) {
+  const b = sim.belief
+  const o = d.hello.map.origin
+  const searched = (x: number, y: number) => {
+    if (!b) return false
+    const i = Math.floor((x - o[0]) / b.res)
+    const j = Math.floor((y - o[1]) / b.res)
+    return i >= 0 && j >= 0 && i < b.w && j < b.h && b.searched[j * b.w + i] === 1
+  }
+  const r2 = REVEAL_NEAR_M * REVEAL_NEAR_M
+  const near = (x: number, y: number) => drones.some(([dx, dy]) => (dx - x) ** 2 + (dy - y) ** 2 < r2)
+  for (const e of d.edges) {
+    for (let k = 0; k < e.n; k++) {
+      if (e.t[k]) continue
+      const f = k / (e.n - 1)
+      const x = e.a[0] + (e.b[0] - e.a[0]) * f
+      const y = e.a[1] + (e.b[1] - e.a[1]) * f
+      if (searched(x, y) || near(x, y)) {
+        e.t[k] = now
+        d.revealed++
+      }
+    }
+  }
+  for (const n of d.nodes) if (!n.t && (searched(n.p[0], n.p[1]) || near(n.p[0], n.p[1]))) n.t = now
+}
+
+/** The searched mask as a 1 px-per-cell image (row 0 = top = highest y). */
+function paintExplored(d: Discovery) {
+  const b = sim.belief
+  if (!b) return
+  if (!d.explored || d.explored.width !== b.w || d.explored.height !== b.h) {
+    d.explored = document.createElement('canvas')
+    d.explored.width = b.w
+    d.explored.height = b.h
+  }
+  const ctx = d.explored.getContext('2d')!
+  const img = ctx.createImageData(b.w, b.h)
+  const [r, g, bl, a] = C.explored
+  for (let j = 0; j < b.h; j++) {
+    const row = (b.h - 1 - j) * b.w
+    for (let i = 0; i < b.w; i++) {
+      if (!b.searched[j * b.w + i]) continue
+      const q = (row + i) * 4
+      img.data[q] = r
+      img.data[q + 1] = g
+      img.data[q + 2] = bl
+      img.data[q + 3] = a
+    }
+  }
+  ctx.putImageData(img, 0, 0)
+  d.exploredVer = b.version
 }
 
 /** Prim's MST rooted at index 0 (BASE). Returns [parent, child] index pairs. */
@@ -78,6 +189,7 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
     const wrap = wrapRef.current!
     const trails = new Map<string, Pt[]>()
     let lastState: unknown = null
+    let disc: Discovery | null = null
     let size = { w: 0, h: 0 }
     let raf = 0
 
@@ -93,6 +205,24 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
     const draw = () => {
       raf = requestAnimationFrame(draw)
       const { hello, state } = sim.snap
+      const now = performance.now()
+      if (hello && disc?.hello !== hello) {
+        disc = newDiscovery(hello) // new session: nothing mapped yet
+        trails.clear()
+        lastState = null
+      }
+      const beliefVer = sim.belief?.version ?? -1
+      if (disc && (state !== lastState || beliefVer !== disc.beliefVer)) {
+        disc.beliefVer = beliefVer
+        const live = (state?.drones ?? []).filter((d) => d.alive).map((d) => [d.x, d.y] as Pt)
+        updateDiscovery(disc, live, now)
+        dirtyRef.current = true
+      }
+      if (disc && beliefVer !== disc.exploredVer && now - disc.exploredAt > EXPLORED_REBUILD_MS) {
+        disc.exploredAt = now
+        paintExplored(disc)
+        dirtyRef.current = true
+      }
       if (state !== lastState) {
         lastState = state
         dirtyRef.current = true
@@ -107,7 +237,7 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
           }
         }
       }
-      if (!dirtyRef.current || !hello || size.w === 0) return
+      if (!dirtyRef.current || !hello || !disc || size.w === 0) return
       dirtyRef.current = false
       const det = detailedRef.current
 
@@ -155,30 +285,75 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
           }
       }
 
-      // ---- roads: the building's route graph ----
-      const nodeXY = new Map(hello.graph.nodes.map((n) => [n.id, [n.x, n.y] as Pt]))
+      // ---- explored area: what the swarm has searched so far ----
+      const b = sim.belief
+      if (disc.explored && b) {
+        const o = hello.map.origin
+        const [ex, ey] = P(o[0], o[1] + b.h * b.res)
+        ctx.imageSmoothingEnabled = true
+        ctx.drawImage(disc.explored, ex, ey, b.w * b.res * v.scale, b.h * b.res * v.scale)
+      }
+
+      // ---- roads: the route graph, only as far as the swarm has mapped it ----
       ctx.lineCap = 'round'
       ctx.lineJoin = 'round'
+      const roadW = det ? Math.max(4, 1.2 * v.scale) : 3
+      let fading = false
+      const fresh: [Pt, Pt, number][] = [] // [from, to, age 0..1]
       ctx.strokeStyle = C.road
-      ctx.lineWidth = det ? Math.max(4, 1.2 * v.scale) : 3
+      ctx.lineWidth = roadW
       ctx.beginPath()
-      for (const e of hello.graph.edges) {
-        const a = nodeXY.get(e.a)
-        const b = nodeXY.get(e.b)
-        if (!a || !b) continue
-        const [ax, ay] = P(a[0], a[1])
-        const [bx, by] = P(b[0], b[1])
-        ctx.moveTo(ax, ay)
-        ctx.lineTo(bx, by)
+      for (const e of disc.edges) {
+        const at = (k: number): Pt => {
+          const f = k / (e.n - 1)
+          return P(e.a[0] + (e.b[0] - e.a[0]) * f, e.a[1] + (e.b[1] - e.a[1]) * f)
+        }
+        for (let k = 0; k + 1 < e.n; k++) {
+          const t0 = e.t[k]
+          const t1 = e.t[k + 1]
+          if (!t0 || !t1) continue
+          const age = (now - Math.max(t0, t1)) / FADE_MS
+          const p0 = at(k)
+          const p1 = at(k + 1)
+          ctx.moveTo(p0[0], p0[1])
+          ctx.lineTo(p1[0], p1[1])
+          if (age < 1) fresh.push([p0, p1, age])
+        }
       }
       ctx.stroke()
-      ctx.fillStyle = C.roadNode
-      for (const n of hello.graph.nodes) {
-        const [px, py] = P(n.x, n.y)
-        ctx.beginPath()
-        ctx.arc(px, py, det ? 2.2 : 1.4, 0, Math.PI * 2)
-        ctx.fill()
+      if (fresh.length) {
+        fading = true
+        const [r, g, bl] = C.fresh
+        ctx.lineWidth = Math.max(2, roadW * 0.6)
+        for (const [p0, p1, age] of fresh) {
+          ctx.strokeStyle = `rgba(${r}, ${g}, ${bl}, ${(0.75 * (1 - age)).toFixed(3)})`
+          ctx.beginPath()
+          ctx.moveTo(p0[0], p0[1])
+          ctx.lineTo(p1[0], p1[1])
+          ctx.stroke()
+        }
       }
+      for (const n of disc.nodes) {
+        if (!n.t) continue
+        const age = (now - n.t) / FADE_MS
+        const [px, py] = P(n.p[0], n.p[1])
+        const r = det ? 2.2 : 1.4
+        ctx.fillStyle = C.roadNode
+        ctx.beginPath()
+        ctx.arc(px, py, r, 0, Math.PI * 2)
+        ctx.fill()
+        if (age < 1) {
+          // a node pops in: a ring that expands and fades
+          fading = true
+          const [cr, cg, cb] = C.fresh
+          ctx.strokeStyle = `rgba(${cr}, ${cg}, ${cb}, ${(0.9 * (1 - age)).toFixed(3)})`
+          ctx.lineWidth = 1.5
+          ctx.beginPath()
+          ctx.arc(px, py, r + age * (det ? 10 : 6), 0, Math.PI * 2)
+          ctx.stroke()
+        }
+      }
+      if (fading) dirtyRef.current = true // keep animating until the glow settles
 
       // ---- planned route (the one the firefighter will walk) ----
       const route = state?.route.points ?? []
@@ -360,7 +535,9 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
       if (infoRef.current) {
         const lost = drones.length - live.length
         infoRef.current.textContent =
-          `${live.length} live` + (lost ? ` · ${lost} lost` : '') + ` · ${tree.length} links` + (route.length > 1 ? ' · route set' : '')
+          `${live.length} live` + (lost ? ` · ${lost} lost` : '') + ` · ${tree.length} links` +
+          (disc.samples ? ` · ${Math.round((100 * disc.revealed) / disc.samples)}% roads mapped` : '') +
+          (route.length > 1 ? ' · route set' : '')
       }
     }
     raf = requestAnimationFrame(draw)
