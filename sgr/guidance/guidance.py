@@ -24,6 +24,15 @@ Rules (§9), highest priority first:
 HUD conventions (for D): arrow_deg = direction to go, relative to the FF heading, degrees,
 CCW positive (+90 = turn left). distance = metres left along the route.
 `say` is set only when the message changes (speak it once). Subtitles are always set.
+
+Drone voices (callouts, voice.py): besides the HUD voice, the drones talk to the firefighter. Each is said
+once, at most one every CALLOUT_GAP_S, never while a danger / correction message is up:
+  intro          first guided tick                 lead: "I'm D1. I'll lead you to the survivor. Stay close behind me."
+  handover       the lead changes                  old lead: "Handing you over to D2...", new lead: "D2 here..."
+  fire_side      a believed fire 1.3-6 m away       nearest drone: "Careful, fire on your right, about 3 metres."
+  survivor_close confirmed survivor within 8 m      lead: "The survivor is close now, about 6 metres."
+  progress       halfway, and the last 15 m         lead: "Halfway there. About 30 metres to go."
+  lead_wait      the lead has waited 5 s            lead: "I'm waiting for you. Walk towards my light."
 """
 
 from __future__ import annotations
@@ -37,6 +46,7 @@ from sgr import config
 from sgr.contracts import Evidence, GuidanceMsg, Pose, PriorMap, SwarmState, TraceRow, VelCmd
 
 from .geometry import Pt, bearing, point_at, project, seg_dist, wrap
+from .voice import Callout, template_msg
 
 LEAD_AHEAD_M = 3.0
 ARROW_MIN_M = 0.6  # shortest arrow lookahead (tight corners, narrow gaps)
@@ -55,12 +65,22 @@ EDGE_ON_ROUTE_M = 1.0
 BLOCKED_HOLD_S = 2.0
 NEW_ROUTE_HOLD_S = 4.0
 LEAD_GAIN = 1.2
+CALLOUT_GAP_S = 4.0  # at most one drone callout per 4 s (handovers excepted)
+FIRE_CALLOUT_M = 6.0
+FIRE_CALLOUT_AGAIN_S = 40.0
+SURVIVOR_CALLOUT_M = 8.0
+LEAD_WAIT_CALLOUT_S = 5.0
+QUIET_KEYS = {"fire", "danger", "blocked", "noroute", "wrong", "complete"}  # the HUD voice has the floor
 
 
 class Guidance:
-    def __init__(self, prior: PriorMap | None = None, world: Any | None = None) -> None:
+    def __init__(self, prior: PriorMap | None = None, world: Any | None = None, voice: Any | None = None,
+                 callouts: bool = True) -> None:
         self.prior = prior
         self.world = world
+        self.voice = voice  # VoiceAgent (Gemini) or None: callouts use their fixed lines
+        self.callouts_on = callouts
+        self._callouts_out: list = []
         self.res = config.BELIEF_RES
         self.origin = tuple(prior.origin) if prior is not None else (0.0, 0.0)
         self.altitude = prior.altitude if prior is not None else 1.6
@@ -82,6 +102,21 @@ class Guidance:
         self._trace_n = 0
         self._walked = 0.0
         self._last_ff: Pt | None = None
+        self._reset_callouts()
+
+    def _reset_callouts(self) -> None:
+        self._cl_last = -math.inf
+        self._cl_intro = False
+        self._cl_lead: str | None = None
+        self._cl_fires: dict[tuple[int, int], float] = {}
+        self._cl_survivor = False
+        self._cl_total: float | None = None
+        self._cl_marks: set[str] = set()
+        self._cl_wait_since: float | None = None
+        self._cl_wait_said = False
+        self._callouts_out = []
+        if self.voice is not None:
+            self.voice.clear()
 
     # ---------------------------------------------------------------- belief accumulation
     def observe(self, swarm: SwarmState) -> None:
@@ -152,9 +187,120 @@ class Guidance:
             self._log(t, "MISSION_COMPLETE", text, {"ff": [round(ff.x, 2), round(ff.y, 2)],
                                                      "walked_m": round(self._walked, 1)})
         self._key = key
+        if self.callouts_on:
+            self._callouts(t, ff, p, swarm, proj, key, remaining)
         msg = GuidanceMsg(arrow_deg=round(arrow, 1), distance=round(max(remaining, 0.0), 1), subtitle=text,
                           say=say, alarm=alarm, severity=sev)
         return msg, cmds
+
+    # ---------------------------------------------------------------- drone voices (callouts)
+    def _say(self, c: Callout, t: float) -> None:
+        if c.kind not in ("handover_out", "handover_in"):
+            self._cl_last = t
+        if self.voice is not None:
+            self.voice.submit(c)
+        else:
+            self._callouts_out.append(template_msg(c))
+
+    def drain_callouts(self) -> list:
+        """CalloutMsgs ready to publish (the voice agent's finished lines, or fixed lines without one)."""
+        out, self._callouts_out = self._callouts_out, []
+        if self.voice is not None:
+            out += self.voice.poll()
+        return out
+
+    def _callouts(self, t: float, ff: Pose, p: Pt, swarm: SwarmState, proj, key: str, remaining: float) -> None:
+        lead = self.lead
+        if lead is None or not proj or self.complete:  # mission over: the drones go quiet
+            return
+        # handover: the old lead hands over, the new one introduces itself
+        if self._cl_lead is not None and lead != self._cl_lead and key not in ("fire", "danger"):
+            old = self._cl_lead
+            self._say(Callout(old, "handover_out", f"Handing you over to {lead}. Follow their light.",
+                              {"from": old, "to": lead}), t)
+            self._say(Callout(lead, "handover_in", f"{lead} here. I've got you, follow me.", {"name": lead}), t)
+        self._cl_lead = lead
+        if key == "follow":
+            self._cl_wait_since = self._cl_wait_since if self._cl_wait_since is not None else t
+        else:
+            self._cl_wait_since, self._cl_wait_said = None, False
+        if key in QUIET_KEYS or t - self._cl_last < CALLOUT_GAP_S:
+            return
+        if not self._cl_intro:
+            self._cl_intro = True
+            self._cl_total = remaining
+            self._say(Callout(lead, "intro", f"I'm {lead}. I'll lead you to the survivor. Stay close behind me.",
+                              {"name": lead}), t)
+            return
+        c = self._fire_callout(t, ff, p, swarm) or self._survivor_callout(p, swarm) or self._progress_callout(remaining)
+        waited = self._cl_wait_since is not None and t - self._cl_wait_since >= LEAD_WAIT_CALLOUT_S
+        if c is None and waited and not self._cl_wait_said:
+            self._cl_wait_said = True
+            c = Callout(lead, "lead_wait", "I'm waiting for you. Walk towards my light.")
+        if c is not None:
+            self._say(c, t)
+
+    def _fire_callout(self, t: float, ff: Pose, p: Pt, swarm: SwarmState) -> Callout | None:
+        if len(self._fire_xy) == 0:
+            return None
+        d = np.hypot(self._fire_xy[:, 0] - p[0], self._fire_xy[:, 1] - p[1])
+        k = int(np.argmin(d))
+        dist = float(d[k])
+        if not FIRE_MARGIN_M + 0.3 < dist <= FIRE_CALLOUT_M:
+            return None
+        f = (float(self._fire_xy[k, 0]), float(self._fire_xy[k, 1]))
+        cluster = (round(f[0] / 3.0), round(f[1] / 3.0))
+        if t - self._cl_fires.get(cluster, -math.inf) < FIRE_CALLOUT_AGAIN_S:
+            return None
+        rel = math.degrees(wrap(bearing(p, f) - ff.yaw))
+        if abs(rel) <= 35:
+            side = "ahead"
+        elif 35 < rel <= 145:
+            side = "left"
+        elif -145 <= rel < -35:
+            side = "right"
+        else:
+            return None  # behind: not worth a warning
+        self._cl_fires[cluster] = t
+        metres = max(1, round(dist))
+        text = (f"Careful, fire ahead, about {metres} metres. Stay with me." if side == "ahead"
+                else f"Careful, fire on your {side}, about {metres} metres.")
+        return Callout(self._nearest_drone(swarm, f) or self.lead, "fire_side", text,
+                       {"side": side, "distance_m": metres}, severity="warn")
+
+    def _nearest_drone(self, swarm: SwarmState, xy: Pt) -> str | None:
+        """The chain drone (or lead) closest to a fire, if within 8 m: it is the one watching it."""
+        best, bd = None, 8.0
+        for dr in sorted(set(self._chain_drones(swarm)) | {self.lead}):
+            q = self._pose_xy(dr)
+            if q is not None and math.dist(q, xy) < bd:
+                best, bd = dr, math.dist(q, xy)
+        return best
+
+    def _survivor_callout(self, p: Pt, swarm: SwarmState) -> Callout | None:
+        sv = swarm.survivor
+        if self._cl_survivor or not sv or sv.status != "confirmed" or sv.x is None or sv.y is None:
+            return None
+        d = math.dist(p, (sv.x, sv.y))
+        if not COMPLETE_M < d <= SURVIVOR_CALLOUT_M:
+            return None
+        self._cl_survivor = True
+        m = max(2, round(d))
+        return Callout(self.lead, "survivor_close", f"The survivor is close now, about {m} metres. Keep going.",
+                       {"distance_m": m})
+
+    def _progress_callout(self, remaining: float) -> Callout | None:
+        total = self._cl_total
+        if not total or total < 20:
+            return None
+        n = round(remaining)
+        if "half" not in self._cl_marks and 15 < remaining <= total / 2:
+            self._cl_marks.add("half")
+            return Callout(self.lead, "progress", f"Halfway there. About {n} metres to go.", {"metres_left": n})
+        if "near" not in self._cl_marks and 8 < remaining <= 15:
+            self._cl_marks.update({"half", "near"})
+            return Callout(self.lead, "progress", f"Nearly there, about {n} metres left.", {"metres_left": n})
+        return None
 
     # ---------------------------------------------------------------- rules
     def _rule(self, t, ff: Pose, p: Pt, swarm: SwarmState, route, proj, status, lead_waits):
@@ -334,3 +480,4 @@ class Guidance:
         self.corrections, self._walked = s["corrections"], s["walked"]
         self._key = None
         self._last_ff = None
+        self._reset_callouts()  # a loaded snapshot starts a fresh conversation

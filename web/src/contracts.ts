@@ -7,7 +7,8 @@
 // Conventions: metres, z up, x east, y north, radians CCW from +x unless `_deg`.
 // Belief cells (map_delta) are 0.2 m: i = column (x), j = row from the bottom (y).
 
-export const CONTRACT_VERSION = 2
+export const CONTRACT_VERSION = 3
+// v3: CalloutMsg (Act 2 drone voices).
 // v2: Scenario.checkpoints, Checkpoint.node. (SwarmState.relook_requests is Python-only:
 // SwarmState never crosses the WebSocket, so it has no mirror here.)
 
@@ -341,6 +342,18 @@ export interface GuidanceMsg {
   severity: Severity
 }
 
+/** Act 2: one drone talks to the firefighter, spoken in that drone's voice (v3). */
+export interface CalloutMsg {
+  type: 'callout'
+  speaker: string // 'D1'..'D4'
+  kind: string // intro | handover_out | handover_in | fire_side | survivor_close | progress | lead_wait
+  text: string // what is said; also the subtitle
+  severity: Severity
+  source: 'gemini' | 'template'
+  audio_b64: string | null // Gemini TTS audio; null -> speak `text` with a local voice
+  audio_mime: string | null
+}
+
 export interface BudgetMsg {
   type: 'budget'
   network: 'offline' | 'online' | 'unknown'
@@ -376,6 +389,7 @@ export type ServerMsg =
   | GuidanceMsg
   | BudgetMsg
   | SummaryMsg
+  | CalloutMsg
 
 // Binary frame: [u8 channel][u32 frame_seq, big-endian][JPEG bytes]
 // (FRAME_HEADER = struct.Struct(">BI") in sgr/contracts.py). channel 1–4 = D1–D4.

@@ -69,6 +69,7 @@ tests/           test_smoke.py (merge gate), test_honesty.py, test_contracts.py
 - Regenerate the test map: `uv run python tools/make_test_map.py`
 - Run headless: `uv run sgr --map maps/test --no-render --no-server --max-ticks 600`
 - Run with the dashboard: `uv run sgr --map maps/marshgate-route --perception mock` -> http://127.0.0.1:8000 (snapshots in `snapshots/`)
+- Act 2 drone voices: `--voice auto` (default: Gemini if `google_api` / `GOOGLE_API_KEY` is in `.env`), `gemini`, `template` (offline fixed lines), `off`
 
 ## Working habits (spec §15.1)
 
