@@ -115,6 +115,49 @@ class Fallback extends Component<{ fallback: ReactNode; children: ReactNode }, {
   }
 }
 
+const FLOOR_PAD_PX = 4 // widen the walkable area by 0.4 m: the floor reaches under the scanned walls
+
+/** A grey floor plate cut to the building: the walkable cells of grid.png, dilated by FLOOR_PAD_PX. */
+function BuildingFloor({ grid, w, h }: { grid: FreeGrid; w: number; h: number }) {
+  const mask = useMemo(() => {
+    const { w: gw, h: gh, free } = grid
+    // separable max filter (dilation): rows, then columns
+    const tmp = new Uint8Array(gw * gh)
+    for (let y = 0; y < gh; y++)
+      for (let x = 0; x < gw; x++) {
+        let on = 0
+        for (let k = Math.max(0, x - FLOOR_PAD_PX); k <= Math.min(gw - 1, x + FLOOR_PAD_PX) && !on; k++) on = free[y * gw + k]
+        tmp[y * gw + x] = on
+      }
+    const canvas = document.createElement('canvas')
+    canvas.width = gw
+    canvas.height = gh
+    const ctx = canvas.getContext('2d')!
+    const img = ctx.createImageData(gw, gh)
+    for (let y = 0; y < gh; y++)
+      for (let x = 0; x < gw; x++) {
+        let on = 0
+        for (let k = Math.max(0, y - FLOOR_PAD_PX); k <= Math.min(gh - 1, y + FLOOR_PAD_PX) && !on; k++) on = tmp[k * gw + x]
+        const o = ((gh - 1 - y) * gw + x) * 4 // canvas row 0 = north edge (grid row 0 = y 0, south)
+        img.data[o] = img.data[o + 1] = img.data[o + 2] = on ? 255 : 0
+        img.data[o + 3] = 255
+      }
+    ctx.putImageData(img, 0, 0)
+    const tex = new THREE.CanvasTexture(canvas)
+    tex.magFilter = THREE.NearestFilter
+    tex.minFilter = THREE.NearestFilter
+    return tex
+  }, [grid])
+  useEffect(() => () => mask.dispose(), [mask])
+  return (
+    <mesh position={[w / 2, h / 2, -0.15]}>
+      <planeGeometry args={[w, h]} />
+      {/* unlit like the scan: concrete grey, never black; alphaTest cuts it to the building */}
+      <meshBasicMaterial color="#77736d" alphaMap={mask} alphaTest={0.5} />
+    </mesh>
+  )
+}
+
 export function Environment() {
   const hello = useSim((s) => s.hello)
   const grid = useFreeGrid(hello?.map.grid_url, hello?.map.resolution)
@@ -125,13 +168,11 @@ export function Environment() {
   const walls = grid ? <ExtrudedWalls grid={grid} /> : null
   return (
     <>
-      {/* Neutral floor under everything: holes / unscanned parts of the scan read as floor, not black. */}
-      {/* At -0.15 m: below the lowest scanned floor (W's scan drifts from +7 cm at the
-          entrance to -5 cm at the survivor), so it never covers the real floor. */}
-      <mesh position={[w / 2, h / 2, -0.15]}>
-        <planeGeometry args={[w, h]} />
-        <meshBasicMaterial color="#77736d" /> {/* unlit like the scan: concrete grey, never black */}
-      </mesh>
+      {/* Neutral floor only under the building (grid.png's walkable area, widened to reach under the walls):
+          holes in the scan read as floor, not black, and there is no grey plate around the building.
+          At -0.15 m: below the lowest scanned floor (W's scan drifts from +7 cm at the entrance to -5 cm
+          at the survivor), so it never covers the real floor. */}
+      {grid && <BuildingFloor grid={grid} w={w} h={h} />}
       {hello.transform ? (
         <>
           {grid && <ExtrudedWalls grid={grid} ghost />}
@@ -313,6 +354,11 @@ function Debris({ h }: { h: Handle }) {
     </mesh>
   )
 }
+
+// Overview: every fire and debris pile is shown from the start (the scenario's real positions), not only once
+// the swarm has found it. ?reveal=belief brings back the reveal-as-discovered look.
+const DRESSING_REVEAL: 'world' | 'belief' =
+  new URLSearchParams(window.location.search).get('reveal') === 'belief' ? 'belief' : 'world'
 
 // W's disaster dressing (<Dressing />) draws flames for click fires and rubble around click
 // debris. ?dressing=off turns it off (perf checks); then our simple cones stand in for fire.
@@ -694,7 +740,7 @@ export function Scene3D({ send }: { send: (m: ClientMsg) => void }) {
           <SurvivorMarker />
           <FirefighterMarker />
           <Drones />
-          <Dressing />
+          <Dressing reveal={DRESSING_REVEAL} />
         </SimFrame>
         <CameraRig mode={mode} onShot={setAutoShot} />
       </Canvas>
