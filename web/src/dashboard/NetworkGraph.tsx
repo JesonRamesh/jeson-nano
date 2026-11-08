@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import type { HelloMsg } from '../contracts'
 import { sim } from '../state/store'
-import { CommsGraph } from './CommsGraph'
 
 // Live link graph: where the drones are and how they connect back to the base, drawn like a
 // SLAM pose graph on a quiet map (north up, true scale). The building's route graph is the
@@ -173,12 +172,7 @@ function relayTree(pts: Pt[]): [number, number][] {
   return edges
 }
 
-type Tab = 'map' | 'comms'
-
 export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions?: ReactNode }) {
-  const [tab, setTab] = useState<Tab>('map')
-  const [commsInfo, setCommsInfo] = useState('')
-  const tabRef = useRef<Tab>(tab)
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const infoRef = useRef<HTMLDivElement>(null)
@@ -186,11 +180,6 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
   const dirtyRef = useRef(true)
   // pan / zoom (detailed view only), relative to the fitted view
   const camRef = useRef({ zoom: 1, panX: 0, panY: 0 })
-
-  useEffect(() => {
-    tabRef.current = tab
-    dirtyRef.current = true
-  }, [tab])
 
   useEffect(() => {
     detailedRef.current = detailed
@@ -251,8 +240,7 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
           }
         }
       }
-      // hidden behind the comms tab: keep recording (trails, discovery), draw on return
-      if (!dirtyRef.current || !hello || !disc || size.w === 0 || tabRef.current !== 'map') return
+      if (!dirtyRef.current || !hello || !disc || size.w === 0) return
       dirtyRef.current = false
       const det = detailedRef.current
 
@@ -564,10 +552,10 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
 
   // ---- pan / zoom like a map (detailed view only) ----
   const drag = useRef<{ x: number; y: number } | null>(null)
-  const mapNav = detailed && tab === 'map'
+  const mapNav = detailed
   return (
     <div
-      className={`netgraph ${mapNav ? 'detailed' : ''} tab-${tab}`}
+      className={`netgraph ${mapNav ? 'detailed' : ''}`}
       ref={wrapRef}
       onWheel={(e) => {
         if (!mapNav) return
@@ -604,25 +592,9 @@ export function NetworkGraph({ detailed, actions }: { detailed: boolean; actions
       }}
     >
       <canvas ref={canvasRef} className="netgraph-map" />
-      {tab === 'comms' && <CommsGraph detailed={detailed} onInfo={setCommsInfo} />}
       <div className="netgraph-head">
         <h2>Swarm links</h2>
-        <div className="netgraph-tabs" role="tablist">
-          {(['map', 'comms'] as const).map((t) => (
-            <button
-              key={t}
-              role="tab"
-              aria-selected={tab === t}
-              className={tab === t ? 'on' : ''}
-              onClick={() => setTab(t)}
-              title={t === 'map' ? 'Where the drones are, and the routes they have mapped' : 'What the drones tell each other'}
-            >
-              {t === 'map' ? 'Map' : 'Comms'}
-            </button>
-          ))}
-        </div>
-        <span ref={infoRef} className="netgraph-info" hidden={tab !== 'map'} />
-        {tab === 'comms' && <span className="netgraph-info">{commsInfo}</span>}
+        <span ref={infoRef} className="netgraph-info" />
         {actions && <div className="netgraph-actions">{actions}</div>}
       </div>
       {mapNav && <div className="netgraph-hint">Scroll to zoom · drag to pan · double-click to reset</div>}
