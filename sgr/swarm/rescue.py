@@ -43,6 +43,7 @@ OLD_ROUTE_S = 6.0
 REPLAN_SETTLE_S = 1.0  # after a re-plan, more of the same blockage is folded into one follow-up (first one: instant)
 NO_ROUTE_RECHECK_S = 2.0
 WATCH_GIVEUP_S = 40.0  # keep re-trying a safe watch post this long (more fires get confirmed meanwhile)
+WATCH_REACH_S = 15.0  # a watcher that hasn't reached its post by then gets another one
 REPOST_S = 5.0  # a watcher pushed off its post (too hot) gets a new one after this
 WATCH_MIN_CORRIDOR_M = 2.5  # a watch post is at least this far from any through-corridor: a flare-up fire there
 #                             leaves ~115 °C on the corridor centreline, under the 150 °C drones may cross (the loop
@@ -56,6 +57,7 @@ CHAIN_READY_M = 0.8  # a chain drone this close to its post is in position
 CHAIN_READY_MAX_S = 40.0  # ... or call the chain ready this long after it formed anyway
 PATROL_END_M = 4.0  # patrol stops this far from the lead / survivor drone (they watch their own ends)
 PATROL_STEP_M = 1.0  # patrol waypoint spacing along the route
+PATROL_OVERLAP_M = 4.0  # neighbouring patrol stretches overlap this much (no blind corner at the boundary)
 PATROL_MAX_HEAT = 0.3  # skip waypoints where the belief already holds this much heat (retreat ping-pong)
 # every drone not watching a fire joins the chain: survivor + lead + checkpoints along the route
 _RING = np.radians(np.arange(0, 360, 10))
@@ -197,7 +199,10 @@ class Rescue:
         span = (total - 2 * PATROL_END_M) / len(walkers)  # the survivor drone watches the last metres itself
         for k, d in enumerate(walkers):
             a = PATROL_END_M + k * span
-            agents[d].patrol(self._patrol_points(pts, a - (1.0 if k else 0.0), a + span, alive[d]))
+            # overlapping stretches: a corner at the boundary (dropped waypoints next to rubble) is seen by both
+            agents[d].patrol(self._patrol_points(pts, a - (PATROL_OVERLAP_M if k else 0.0),
+                                                 a + span + (PATROL_OVERLAP_M if k < len(walkers) - 1 else 0.0),
+                                                 alive[d]))
 
     def _patrol_points(self, pts: list[Pt], s0: float, s1: float, pose: Pose) -> list[Pt]:
         """Waypoints every PATROL_STEP_M along the route between arc lengths s0 and s1 that this drone can
@@ -320,6 +325,9 @@ class Rescue:
 
     # ------------------------------------------------------------------ chain
     def _chain(self, t: float, agents: dict[str, Agent], alive: dict[str, Pose], target: Pt) -> None:
+        if self.watcher is not None and self.watcher in alive:  # the survivor is found: the rescue path outranks
+            agents[self.watcher].unstation()  # watching a fire, so the watcher joins the chain
+            self.watcher, self._watch_done = None, True
         cands = sorted(d for d in alive if d != self.watcher)
         key = (self.bb.route.version, tuple(cands))
         if key == self._chain_key or not cands or not self.path:
@@ -396,7 +404,14 @@ class Rescue:
             return
         if self.watcher is not None and not self._watch_done:
             ag = agents[self.watcher]
-            if ag._station != self._watch_post_xy and t - self._watch_t > REPOST_S:  # pushed off (too hot)
+            post_xy = self._watch_post_xy
+            stale = post_xy is not None and t - self._watch_t > REPOST_S and (
+                self._summed_temp(post_xy) >= WATCH_MAX_C  # a fire confirmed since makes it too hot
+                or (t - self._watch_t > WATCH_REACH_S
+                    and math.hypot(alive[self.watcher].x - post_xy[0], alive[self.watcher].y - post_xy[1]) > 1.0))
+            if stale:
+                self._watch_post_xy = None  # re-post below
+            if ag._station != self._watch_post_xy and t - self._watch_t > REPOST_S:  # pushed off / post went bad
                 post = None
                 for h in (h for h in self.bb.hazards.values() if h.kind == "fire"):  # any fire, best post
                     cand = self._watch_post(h.xy, alive[self.watcher])

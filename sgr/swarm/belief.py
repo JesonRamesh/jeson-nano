@@ -20,7 +20,7 @@ CODE = {s: k for k, s in enumerate(STATES)}
 WALL, FREE, BLOCKED, FIRE, DANGER, UNSAFE = range(len(STATES))
 
 RAY_STEP = 0.05  # m, quarter cell
-BLOCK_MARGIN = 0.3  # measured < expected - margin -> something new is there
+BLOCK_MARGIN = 0.3  # measured < expected - margin -> something new is there (0.2 m closed rubble gaps in the map)
 CONSECUTIVE = 2  # scans needed to mark / clear
 CLEAR_BEYOND = 0.4  # m: a ray must reach this far past a blocked cell to count as "passed through"
 _LIDAR_ANG = np.radians(np.arange(config.LIDAR_RAYS) * 360.0 / config.LIDAR_RAYS)

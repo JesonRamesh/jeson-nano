@@ -41,6 +41,7 @@ from .trace import Trace
 
 EXCLUDE_RETRY_S = 30.0  # a drone retries areas it gave up on after this
 DEAD_END_TTL_S = 45.0  # a "couldn't see it" dead-end mark is retried after this
+SAME_BLOCKAGE_S = 10.0  # ... and seen within this long (otherwise it is a new blockage, e.g. a judge's click)
 SAME_BLOCKAGE_M = 2.5  # new blocked cells this close to a reported blockage extend it (one trace row each)
 
 
@@ -181,8 +182,9 @@ class Swarm:
             if blocked:
                 xs = [self.belief.cell_center(i, j) for i, j in blocked]
                 cx, cy = float(np.mean([p[0] for p in xs])), float(np.mean([p[1] for p in xs]))
-                known = [h for h in self.bb.hazards.values() if h.kind == "blocked"
+                known = [h for h in self.bb.hazards.values() if h.kind == "blocked" and t - h.t < SAME_BLOCKAGE_S
                          and min(math.hypot(h.xy[0] - x, h.xy[1] - y) for x, y in xs) < SAME_BLOCKAGE_M]
+                # (only a blockage still being mapped: debris that appears later next to old rubble is new)
                 if known:  # more cells of a blockage already reported: the map grows, the trace doesn't
                     for h in known:
                         h.t = t

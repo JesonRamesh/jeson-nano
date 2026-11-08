@@ -108,7 +108,7 @@ def build_scenario() -> Scenario:
             start=[(2.0, 2.5), (2.0, 3.5), (2.5, 2.5), (2.5, 3.5)],
             altitude=1.6,
         ),
-        flare=Flare(t=65.0, target="D3"),
+        flare=Flare(t=35.0, target="D3"),
         heat=Heat(limit_c=70.0, ambient_c=20.0),
         beats=Beats(decoy_drone="D2", d3_area_node="n10"),
     )

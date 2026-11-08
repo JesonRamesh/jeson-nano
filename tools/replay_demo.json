@@ -21,8 +21,8 @@
       "y": 24.8
     },
     {
-      "after": "prev",
-      "wait": 12,
+      "after": "click_noticed",
+      "wait": 8,
       "do": "undo"
     },
     {
@@ -43,8 +43,8 @@
       "ahead_of_ff": 5
     },
     {
-      "after": "prev",
-      "wait": 8,
+      "after": "click_noticed",
+      "wait": 6,
       "do": "undo"
     },
     {

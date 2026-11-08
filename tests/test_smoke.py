@@ -62,14 +62,22 @@ def test_act1_beats(test_map) -> None:
     assert "CONFIRM_HAZARD" in actions, "fire never confirmed"
     victim = loop.flare_victim
     assert any(r.action == "DRONE_LOST" and r.drone == victim for r in loop.trace), f"{victim} never declared lost"
+    lost_t = min(r.t for r in loop.trace if r.action == "DRONE_LOST")
+    found_t = min(r.t for r in loop.trace if r.action == "SURVIVOR_CONFIRMED")
+    assert lost_t < found_t, "the drone must fail during the exploration, before the survivor is found"
+    assert sum(r.action == "DRONE_LOST" for r in loop.trace) == 1 and len(loop.dead) == 1  # 3 drones carry on
     st = loop.swarm_state
     assert st.chain_formed and st.route.status == "ok", "no chain / no safe route at the end"
     assert victim not in {c.drone for c in st.checkpoints}, "a lost drone still holds a checkpoint"
 
 
 def test_swarm_covers_test_map(test_map) -> None:
-    """H1-H4 done criterion: 4 drones search >= 90 % of maps/test in under 120 sim-seconds."""
+    """H1-H4 done criterion: 4 drones search >= 90 % of maps/test in under 120 sim-seconds.
+
+    Exploration capability with all four drones, so the scenario's drone failure is switched off here
+    (the failure is checked by test_act1_beats)."""
     loop = _loop(test_map)
+    loop.scenario = loop.scenario.model_copy(update={"flare": None})
     t90 = None
     for _ in range(1200):  # 120 s
         loop.tick()

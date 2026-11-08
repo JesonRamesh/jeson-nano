@@ -142,4 +142,41 @@ def test_flare_never_hits_a_random_drone(test_map) -> None:
     loop = SimLoop(world, Perception(mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight),
                    Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids)), sc, render=False, realtime=False)
     assert loop._flare_victim(waited=5.0) == _WAIT
-    assert loop._flare_victim(waited=46.0) is None  # nobody near a fire after the 45 s wait: skip the flare-up
+    assert loop._flare_victim(waited=71.0) is None  # nobody near a fire after the 70 s wait: skip the flare-up
+
+
+def test_unexpected_heat_means_retreat_even_mid_crossing(test_map) -> None:
+    """The short-crossing allowance (70-150 °C) is only for heat the map predicted: hotter than expected = a
+    fire nobody has confirmed -> the normal 70 °C retreat (this kept drones out of 400+ °C)."""
+    sc = Scenario.load(test_map)
+    sw = Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids))
+    ag = sw.agents["D1"]
+    ag.mode = "TRANSIT"
+    ag._v = np.array([1.0, 0.0])  # moving along a path: "crossing"
+    sw.hazards.heat(1.0, "D1", Pose(x=8.0, y=10.0, z=1.6), 90.0, ag)  # 90 °C where the map expects nothing
+    assert ag.mode == "RETREAT"
+
+
+def test_flare_never_next_to_another_drone(test_map) -> None:
+    sc = Scenario.load(test_map)
+    world = FakeWorld(test_map, sc)  # all four drones start within ~0.7 m of each other at the entrance
+    loop = SimLoop(world, Perception(mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight),
+                   Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids)), sc, render=False, realtime=False)
+    assert not loop._flare_safe("D1", world.ground_truth().fires)  # another drone is right there
+
+
+def test_a_drone_always_fails_signal_loss_when_no_flare_up_is_safe(test_map) -> None:
+    """Every run loses exactly one drone in Act 1 (perception-driven action + adaptation): if no safe flare-up
+    exists, a drone loses its signal instead (no fire placed), and the swarm drops it from the network."""
+    sc = Scenario.load(test_map)
+    sc.flare.t = 5.0  # (after the first heartbeats: the swarm can only lose a drone it has heard from)
+    world = FakeWorld(test_map, sc)
+    world.set_drone_cmd = lambda *a, **k: None  # keep all four bunched at the entrance: no flare-up is ever safe
+    loop = SimLoop(world, Perception(mode="mock", ground_truth=world.ground_truth, line_of_sight=world.line_of_sight),
+                   Swarm(PriorMap.from_map(test_map, sc), list(sc.drones.ids)), sc, render=False, realtime=False)
+    fires_before = len(world.ground_truth().fires)
+    loop.run(max_ticks=int((5.0 + 5.0) / 0.1))  # fails at flare.t (no waiting any more), lost 3 s later
+    assert loop.signal_lost is not None and loop.dead == {loop.signal_lost}
+    assert len(world.ground_truth().fires) == fires_before  # signal loss places no fire
+    lost = [r for r in loop.trace if r.action == "DRONE_LOST"]
+    assert len(lost) == 1 and lost[0].drone == loop.signal_lost and lost[0].evidence.sensor == "heartbeat"
