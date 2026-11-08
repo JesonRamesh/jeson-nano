@@ -375,3 +375,21 @@ def test_one_warning_per_fire_even_if_it_spans_cells():
         g.tick(k * 0.1, Pose(x=x, y=3.0, yaw=0.0), _swarm(t=k * 0.1, delta=fire if k == 1 else ()))
         out += _kinds(g)
     assert len([o for o in out if o[1] == "fire_side"]) == 1
+
+
+def test_lead_down_mid_walk():
+    """Presenter presses Fail on the lead in Act 2: the next drone says the lead is down, never 'taking over'."""
+    from sgr.contracts import SwarmDrone
+
+    w = StubWorld({"D1": (6, 3), "D2": (16, 3)})
+    g = Guidance(world=w)
+    g.tick(0.0, Pose(x=3.0, y=3.0, yaw=0.0), _swarm())
+    _kinds(g)
+    down = SwarmState(t=1.0, route=Route(points=ROUTE, status="ok", version=1), lead="D2", chain_formed=True,
+                      checkpoints=[Checkpoint(x=16.0, y=3.0, drone="D2")],
+                      drones=[SwarmDrone(id="D1", status="LOST", alive=False), SwarmDrone(id="D2", status="CHAIN")])
+    g.tick(1.0, Pose(x=3.0, y=3.0, yaw=0.0), down)
+    said = _kinds(g)
+    assert g.lead == "D2"
+    assert ("D2", "handover", "D2 here, D1 is down. Follow me.") in said
+    assert not any(s[0] == "D1" for s in said)

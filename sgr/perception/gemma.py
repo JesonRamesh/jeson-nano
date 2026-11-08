@@ -21,8 +21,10 @@ from PIL import Image
 from sgr import config
 from sgr.contracts import GemmaResult
 
+# Neutral on purpose: "...search-and-rescue drone in a burning building" primed Gemma to see fire everywhere
+# (renders, think off: false fire in 30/40 clear corridors, vs 2-3/40 with this; fire 24/24, survivor 3/4 either way).
 PROMPT = (
-    "You are the vision system of a search-and-rescue drone in a burning building. "
+    "You are the vision system of a drone. "
     "Look at the image. Answer only JSON: "
     '{"fire": bool, "person": bool, "confidence": 0..1, "caption": "≤12 words"}.'
 )
