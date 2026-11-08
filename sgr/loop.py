@@ -396,6 +396,12 @@ class SimLoop:
             return False
         for msg in self.bus.drain_inbound():
             if isinstance(msg, Act2StartMsg):
+                # Act 2 continues THIS run when its chain is in place: save act2_start from the live state now
+                # (every failure so far included) and start from it, through the same load path as always.
+                # Before that, G jumps to the last saved act2_start (snapshots/ or the committed one).
+                live = self.act == 1 and self.swarm_state is not None and self.swarm_state.phase == "chain_ready"
+                if live and self._save("act2_start") is None:
+                    print("sgr: WARNING could not save the live chain; Act 2 starts from the last act2_start")
                 if self._load("act2_start", act=2):
                     return True
                 continue
@@ -463,6 +469,8 @@ class SimLoop:
             self.summary = None
         if name == "act2_start":
             self._act2_saved = True  # don't overwrite it from the replayed chain
+        elif name == "act1_start":
+            self._act2_saved = False  # a new Act 1 run: save ITS chain as act2_start (not the previous run's)
         print(f"sgr: snapshot '{name}' loaded -> t={self.t:.1f}s act {self.act}")
         self._reanchor = True
         self._resync_clients()
