@@ -1214,3 +1214,16 @@ kbd {
   opacity: 0.35;
   cursor: not-allowed;
 }
+
+/* ------------------------------------------------------------------ global full-screen button
+   Pinned to the window's top-right corner, the same in every act and focus state. The tile whose
+   top-right corner sits under it (Dashboard: underFs) moves its corner chips left to make room, and
+   the event notices stack just to its left. */
+.fs-btn {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 96;
+}
+.tile-under-fs .feed-top { padding-right: 50px; }
+.banners { right: 60px; }

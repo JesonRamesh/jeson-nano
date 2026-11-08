@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { TraceRow } from '../contracts'
 import { sim } from '../state/store'
 
@@ -10,11 +10,15 @@ import { sim } from '../state/store'
 // goes down every link from the sender to each live drone. One case has a known pair:
 // a REPLAN that cites another drone's LiDAR (evidence.value.seen_by) is drawn as that drone ->
 // the re-planning drone. Rows replayed after a snapshot load (older than the sim clock) are skipped.
+// When the tile is focused (detailed), each lit link also carries a short label saying what was sent
+// ("fire confirmed", "taking n13", ...), and transmissions stay up a little longer so it can be read.
 
 type Pt = [number, number]
 
 const TRAVEL_MS = 750 // pulse runs along the link
 const GLOW_MS = 1500 // the link keeps glowing, fading out, until here (from launch)
+const GLOW_DETAILED_MS = 2800 // focused tile: longer, so the message on the link can be read
+const LABEL_AT = 0.4 // message sits this far along the link from the sender (diagonals cross at 0.5)
 const MAX_LIVE = 10 // transmissions on screen at once (oldest dropped)
 const LIVE_WINDOW_S = 2 // ignore trace rows older than this vs the sim clock
 
@@ -23,6 +27,7 @@ interface Tx {
   to: string[] // receivers
   t0: number // performance.now() at launch
   colour: string
+  msg: string // what was sent, shown on the link when the tile is focused
 }
 
 /** Decisions a drone shares with the others (DRONE_LOST / REASSIGN show on the node instead). */
@@ -44,6 +49,47 @@ const SHARED = new Set<TraceRow['action']>([
   'MISSION_COMPLETE',
 ])
 
+const s = (v: unknown) => (typeof v === 'string' && v ? v : null)
+
+/** A few words for what a shared decision tells the other drones. */
+function message(r: TraceRow, relayed: boolean): string {
+  const v = (r.evidence.value ?? {}) as Record<string, unknown>
+  switch (r.action) {
+    case 'ASSIGN_AREA':
+      return s(v.area) ? `taking ${v.area}` : 'taking an area'
+    case 'EXPLORE':
+      return s(v.area) ? `${v.area} done` : 'area done'
+    case 'INSPECT':
+      return 'closer look'
+    case 'CONFIRM_HAZARD':
+      return 'fire confirmed'
+    case 'REJECT_DETECTION':
+      return 'false alarm'
+    case 'UNCONFIRMED':
+      return 'need a 2nd view'
+    case 'MARK_BLOCKED':
+      return 'path blocked'
+    case 'REPLAN':
+      return relayed ? 'debris ahead' : 're-routing'
+    case 'RETREAT':
+      return typeof r.evidence.value === 'number' ? `too hot ${r.evidence.value.toFixed(0)}°C` : 'too hot'
+    case 'SURVIVOR_CONFIRMED':
+      return 'survivor found'
+    case 'CHAIN_POSITION':
+      return s(v.role) ? `chain: ${v.role}` : 'chain post'
+    case 'NO_ROUTE':
+      return 'no safe route'
+    case 'ESCORT':
+      return 'escorting'
+    case 'FF_CORRECTION':
+      return 'correcting FF'
+    case 'MISSION_COMPLETE':
+      return 'mission complete'
+    default:
+      return r.action.toLowerCase().replace(/_/g, ' ')
+  }
+}
+
 /** Node positions: 4 drones as a diamond (1 top, 2 right, 3 bottom, 4 left); otherwise a ring. */
 function layout(n: number, cx: number, cy: number, rx: number, ry: number): Pt[] {
   return Array.from({ length: n }, (_, i) => {
@@ -54,7 +100,7 @@ function layout(n: number, cx: number, cy: number, rx: number, ry: number): Pt[]
 
 const MONO = `'Google Sans Code Variable', 'Google Sans Code', ui-monospace, monospace`
 
-export function CommsGraph({ detailed, actions }: { detailed: boolean; actions?: ReactNode }) {
+export function CommsGraph({ detailed }: { detailed: boolean }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const detailedRef = useRef(detailed)
@@ -106,12 +152,14 @@ export function CommsGraph({ detailed, actions }: { detailed: boolean; actions?:
         const v = (r.evidence.value ?? {}) as Record<string, unknown>
         let from = r.drone
         let to = [...live].filter((d) => d !== r.drone)
+        let relayed = false
         if (r.action === 'REPLAN' && typeof v.seen_by === 'string' && v.seen_by !== r.drone) {
           from = v.seen_by // the drone whose LiDAR saw the debris tells the one that re-plans
           to = [r.drone]
+          relayed = true
         }
         if (!to.length) continue
-        txs.push({ from, to, t0: now, colour: colours.get(from) ?? '#eef1f4' })
+        txs.push({ from, to, t0: now, colour: colours.get(from) ?? '#eef1f4', msg: message(r, relayed) })
         sent++
       }
       if (seen.size > 4000) {
@@ -125,10 +173,11 @@ export function CommsGraph({ detailed, actions }: { detailed: boolean; actions?:
       raf = requestAnimationFrame(draw)
       const now = performance.now()
       ingest(now)
-      txs = txs.filter((t) => now - t.t0 < GLOW_MS)
+      const det = detailedRef.current
+      const life = det ? GLOW_DETAILED_MS : GLOW_MS
+      txs = txs.filter((t) => now - t.t0 < life)
       const { hello, state } = sim.snap
       if (!hello || size.w === 0) return
-      const det = detailedRef.current
       const dpr = window.devicePixelRatio || 1
       const ctx = canvas.getContext('2d')!
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -172,7 +221,7 @@ export function CommsGraph({ detailed, actions }: { detailed: boolean; actions?:
         const ms = now - t.t0
         const run = Math.min(1, ms / TRAVEL_MS)
         const e = 1 - (1 - run) ** 3 // ease-out
-        const glow = ms < TRAVEL_MS ? 1 : 1 - (ms - TRAVEL_MS) / (GLOW_MS - TRAVEL_MS)
+        const glow = ms < TRAVEL_MS ? 1 : 1 - (ms - TRAVEL_MS) / (life - TRAVEL_MS)
         for (const rcv of t.to) {
           const b = at.get(rcv)
           if (!b) continue
@@ -213,7 +262,7 @@ export function CommsGraph({ detailed, actions }: { detailed: boolean; actions?:
         const ok = s?.alive ?? true
         const col = ok ? (colour.get(id) ?? '#eef1f4') : '#5a626d'
         const talking = txs.some((t) => t.from === id && now - t.t0 < TRAVEL_MS)
-        const hearing = txs.some((t) => t.to.includes(id) && now - t.t0 >= TRAVEL_MS * 0.8 && now - t.t0 < GLOW_MS)
+        const hearing = txs.some((t) => t.to.includes(id) && now - t.t0 >= TRAVEL_MS * 0.8 && now - t.t0 < life)
         if (ok) {
           ctx.fillStyle = talking ? `${col}66` : hearing ? 'rgba(238, 241, 244, 0.16)' : 'rgba(238, 241, 244, 0.07)'
           ctx.beginPath()
@@ -257,6 +306,51 @@ export function CommsGraph({ detailed, actions }: { detailed: boolean; actions?:
         }
       })
 
+      // ---- messages on the lit links (focused tile only): the newest per link, once the pulse
+      // has passed the label's spot ----
+      if (det) {
+        const newest = new Map<string, { t: Tx; a: Pt; b: Pt }>()
+        for (const t of txs) {
+          const a = at.get(t.from)
+          if (!a) continue
+          for (const rcv of t.to) {
+            const b = at.get(rcv)
+            if (b) newest.set(`${t.from}>${rcv}`, { t, a, b }) // txs are oldest first
+          }
+        }
+        ctx.font = `500 11px ${MONO}`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        for (const { t, a, b } of newest.values()) {
+          const ms = now - t.t0
+          const run = Math.min(1, ms / TRAVEL_MS)
+          if (1 - (1 - run) ** 3 < LABEL_AT) continue
+          const fadeIn = Math.min(1, (ms - TRAVEL_MS * 0.25) / 180)
+          const fadeOut = Math.min(1, (life - ms) / 400)
+          const alpha = Math.max(0, Math.min(fadeIn, fadeOut))
+          if (alpha <= 0) continue
+          const x = a[0] + (b[0] - a[0]) * LABEL_AT
+          const y = a[1] + (b[1] - a[1]) * LABEL_AT
+          const w = ctx.measureText(t.msg).width + 14
+          const h = 19
+          ctx.save()
+          ctx.globalAlpha = alpha
+          ctx.fillStyle = 'rgba(10, 13, 17, 0.88)'
+          ctx.strokeStyle = t.colour
+          ctx.lineWidth = 1
+          ctx.shadowColor = t.colour
+          ctx.shadowBlur = 8
+          ctx.beginPath()
+          ctx.roundRect(x - w / 2, y - h / 2, w, h, h / 2)
+          ctx.fill()
+          ctx.shadowBlur = 0
+          ctx.stroke()
+          ctx.fillStyle = '#eef1f4'
+          ctx.fillText(t.msg, x, y + 0.5)
+          ctx.restore()
+        }
+      }
+
       const text = `${sent} message${sent === 1 ? '' : 's'} shared`
       if (text !== lastInfo) {
         lastInfo = text
@@ -276,7 +370,6 @@ export function CommsGraph({ detailed, actions }: { detailed: boolean; actions?:
       <div className="netgraph-head">
         <h2>Comms</h2>
         <span className="netgraph-info">{info}</span>
-        {actions && <div className="netgraph-actions">{actions}</div>}
       </div>
     </div>
   )
