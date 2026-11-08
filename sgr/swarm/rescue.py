@@ -11,9 +11,9 @@
   entrance to meet the firefighter, every other drone becomes a checkpoint (sentinel): sharpest turns first,
   then the middle of the longest stretch between checkpoints, so the drones mark out the path.
   Rebuilt when the route changes or a drone is lost.
-- Act 1, once the chain is ready (act2_start already saved with everyone at their posts): the chain
-  drones split the route and patrol it (lead first, sentinel middle, survivor drone the last stretch),
-  LiDAR sweeping as they go, so a judge's debris click anywhere on the route gets noticed. In Act 2 they hold their posts again (P's
+- Act 1, once the chain is ready (act2_start already saved with everyone at their posts): the lead and one
+  sentinel split the route and patrol it, LiDAR sweeping as they go, so a judge's debris click anywhere on
+  the route gets noticed; the survivor drone and any extra checkpoint drones hold their posts. In Act 2 they hold their posts again (P's
   handover logic expects fixed checkpoints, and the lead meets the firefighter at the entrance).
 - Act 2 (the firefighter's tracked position `ff` is known): re-plans start at the firefighter, only
   blockages AHEAD of them on the route count, the lead is the drone nearest the firefighter and
@@ -42,10 +42,14 @@ SAME_ROUTE_DEV_M = 1.5  # ... and never further than this from the old line is t
 OLD_ROUTE_S = 6.0
 REPLAN_SETTLE_S = 1.0  # after a re-plan, more of the same blockage is folded into one follow-up (first one: instant)
 NO_ROUTE_RECHECK_S = 2.0
+WATCH_GIVEUP_S = 40.0  # keep re-trying a safe watch post this long (more fires get confirmed meanwhile)
 REPOST_S = 5.0  # a watcher pushed off its post (too hot) gets a new one after this
-WATCH_MIN_CORRIDOR_M = 3.0  # a watch post is at least this far from any corridor: a flare-up fire there leaves
-#                             ~70 °C on the corridor centreline (crossable), its > 150 °C core (~2.2 m) stays out
-WATCH_MAX_HEAT = 0.8  # heat_norm limit at a watch post (~60 °C: under the 70 °C retreat limit)
+WATCH_MIN_CORRIDOR_M = 2.5  # a watch post is at least this far from any through-corridor: a flare-up fire there
+#                             leaves ~115 °C on the corridor centreline, under the 150 °C drones may cross (the loop
+#                             re-checks the real summed heat before the flare)
+WATCH_MIN_M, WATCH_MAX_M = 3.0, 5.5  # watch-post distance from the fire (camera range ~5.5 m)
+WATCH_MAX_C = 66.0  # summed modelled heat of all confirmed fires at a watch post (retreat limit is 70 °C)
+WATCH_MAX_HEAT = 0.92  # belief heat (measured danger) at a watch post  # heat_norm limit at a watch post (~60 °C: under the 70 °C retreat limit)
 WATCH_M = 3.3  # fire-watch distance: ~55 °C on the heat model, under the 70 °C retreat limit
 TURN_DEG = 35.0
 CHAIN_READY_M = 0.8  # a chain drone this close to its post is in position
@@ -73,6 +77,7 @@ class Rescue:
     _watch_done: bool = False  # one watch per run: the flare-up victim is not replaced
     _watch_post_xy: Pt | None = None
     _watch_t: float = 0.0
+    _watch_start: float = 0.0
     _pending: tuple[str, str, list[tuple[int, int]], Pt] | None = None  # (sensor, drone, cells, xy)
     _next_check: float = 0.0
     _chain_key: tuple | None = None
@@ -169,8 +174,14 @@ class Rescue:
     def _patrols(self, agents: dict[str, Agent], alive: dict[str, Pose]) -> None:
         """Act 1 + chain ready: the chain drones split the route (lead first, sentinels in the middle,
         the survivor drone the last stretch up to the survivor) and sweep it; Act 2: back to posts."""
-        order = {"lead": 0, "sentinel": 1, "survivor": 2}
-        walkers = sorted((d for d in self.roles if d in alive), key=lambda d: (order[self.roles[d]], d))
+        # only the lead and ONE sentinel patrol: the survivor drone stays over the survivor and extra checkpoint
+        # drones hold their posts, so the chain still reads as a chain on the projector (W's request)
+        lead = [d for d, r in self.roles.items() if r == "lead" and d in alive]
+        sentinels = sorted(d for d, r in self.roles.items() if r == "sentinel" and d in alive)
+        walkers = lead + sentinels[:1]
+        for d in self.roles:
+            if d not in walkers:
+                agents[d].patrol(None)
         active = self._ready and self.ff is None and self.path and self.bb.route.status == "ok"
         if not active or not walkers:
             for d in self.roles:
@@ -183,7 +194,7 @@ class Rescue:
         self._patrol_key = key
         pts = rdp(self.path, 0.1)
         total = path_length(pts)
-        span = (total - PATROL_END_M) / len(walkers)  # the survivor drone's stretch ends at the survivor
+        span = (total - 2 * PATROL_END_M) / len(walkers)  # the survivor drone watches the last metres itself
         for k, d in enumerate(walkers):
             a = PATROL_END_M + k * span
             agents[d].patrol(self._patrol_points(pts, a - (1.0 if k else 0.0), a + span, alive[d]))
@@ -386,13 +397,19 @@ class Rescue:
         if self.watcher is not None and not self._watch_done:
             ag = agents[self.watcher]
             if ag._station != self._watch_post_xy and t - self._watch_t > REPOST_S:  # pushed off (too hot)
-                post = self._watch_post(self.watch_fire, alive[self.watcher])
+                post = None
+                for h in (h for h in self.bb.hazards.values() if h.kind == "fire"):  # any fire, best post
+                    cand = self._watch_post(h.xy, alive[self.watcher])
+                    if cand is not None and (post is None or self._corridor_dist(cand) > self._corridor_dist(post)):
+                        post, self.watch_fire = cand, h.xy
                 if post is not None:
                     self._watch_post_xy, self._watch_t = post, t
                     ag.station(post, face=self.watch_fire, mode="WATCHING", task="watching the fire")
-                else:  # nowhere safe to watch from any more: back to exploring (no watcher -> no flare-up)
+                elif t - self._watch_start > WATCH_GIVEUP_S:  # still nowhere safe: back to exploring (no flare-up)
                     ag.unstation()
                     self.watcher, self._watch_done = None, True
+                else:  # hold here (where the retreat ended) and try again in REPOST_S as more fires get confirmed
+                    self._watch_post_xy, self._watch_t = None, t
             return
         if self.watcher is not None or self._watch_done:
             return
@@ -415,7 +432,7 @@ class Rescue:
             return
         _, fire, d, post = best
         self.watcher, self.watch_fire = d, fire
-        self._watch_post_xy, self._watch_t = post, t
+        self._watch_post_xy, self._watch_t, self._watch_start = post, t, t
         agents[d].release()
         agents[d].set_area(None)
         self.bb.claims = {a: o for a, o in self.bb.claims.items() if o != d}
@@ -426,26 +443,42 @@ class Rescue:
                                                          "post": [round(post[0], 2), round(post[1], 2)]}))
 
     def _watch_post(self, fire: Pt, pose: Pose) -> Pt | None:
-        """Reachable spot ~WATCH_M from the fire with line of sight, as far as possible from the corridors."""
+        """Every reachable cell 3-5.5 m from the fire with line of sight to it, cool enough (summed heat of all
+        confirmed fires) and clear of the through-corridors: the one furthest from the corridors. A cell-by-cell
+        search: with spread fires the allowed region can be just a few cells, which rings of samples miss."""
         cm = cost_map(self.belief)
         df = DistanceField(self.belief, (pose.x, pose.y))
+        b = self.belief
+        i0, j0 = b.world_to_cell(*fire)
+        n = int(math.ceil(WATCH_MAX_M / b.res))
         best, score = None, -math.inf
-        for r in (WATCH_M, WATCH_M + 0.3, WATCH_M - 0.2, 4.0, 4.5, 5.0):
-            for a in _RING:
-                px, py = fire[0] + r * math.cos(a), fire[1] + r * math.sin(a)
-                i, j = self.belief.world_to_cell(px, py)
-                if not (self.belief.inside(i, j) and cm.traversable[j, i] and np.isfinite(df.cost[j, i])):
+        for j in range(max(0, j0 - n), min(b.h, j0 + n + 1)):
+            for i in range(max(0, i0 - n), min(b.w, i0 + n + 1)):
+                if not (cm.traversable[j, i] and np.isfinite(df.cost[j, i])):
+                    continue  # (map heat not used here: thermometer estimates double-count fires since confirmed;
+                    # the summed heat of confirmed fires below decides, and a too-hot post just makes it re-post)
+                px, py = b.cell_center(i, j)
+                if not WATCH_MIN_M <= math.hypot(px - fire[0], py - fire[1]) <= WATCH_MAX_M:
                     continue
-                if self.belief.heat[j, i] >= WATCH_MAX_HEAT or not self._los((px, py), fire):
-                    continue  # spread fires: 3.3 m from this one can be right next to another
-                if self._corridor_dist((px, py)) < WATCH_MIN_CORRIDOR_M:
+                cd = self._corridor_dist((px, py))
+                if cd < WATCH_MIN_CORRIDOR_M or cd - 0.01 * df.cost[j, i] * b.res <= score:
                     continue  # never in a corridor: the flare-up would put a fire on the way to everything
-                s = self._corridor_dist((px, py)) - 0.01 * df.cost[j, i] * self.belief.res
-                if s > score:
-                    best, score = (px, py), s
-            if best is not None:
-                return best
-        return None
+                if self._summed_temp((px, py)) >= WATCH_MAX_C or not self._los((px, py), fire):
+                    continue  # spread fires add up: 3.3 m from this one can be 96 °C next to the others
+                best, score = (px, py), cd - 0.01 * df.cost[j, i] * b.res
+        return best
+
+    def _summed_temp(self, p: Pt) -> float:
+        """Modelled temperature at p from ALL confirmed fires, summed like the physics (not the hottest one)."""
+        from .hazards import HEAT_PEAK_C, HEAT_SIGMA_M  # (no import cycle: hazards doesn't import rescue)
+
+        from sgr import config
+        t = config.AMBIENT_C
+        for h in self.bb.hazards.values():
+            if h.kind == "fire":
+                d2 = (p[0] - h.xy[0]) ** 2 + (p[1] - h.xy[1]) ** 2
+                t += HEAT_PEAK_C * math.exp(-d2 / (2 * HEAT_SIGMA_M ** 2))
+        return t
 
     def _corridor_dist(self, p: Pt) -> float:
         """Distance to the nearest through-corridor (dead-end room edges don't count)."""
