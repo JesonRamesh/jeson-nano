@@ -158,6 +158,9 @@ class World:
         self._dead: set[str] = set()
 
         self._renderer: mujoco.Renderer | None = None
+        self._ff_opt: mujoco.MjvOption | None = None  # renders only the firefighter figure (dashboard overlay)
+        self._ff_figure = bool(shapes.ff_model_parts())
+        self._ff_active = False
         self._scene_opt: mujoco.MjvOption | None = None
         self._ray_gid = np.zeros(1, np.int32)
         self._lidar_gid = np.zeros(LIDAR_N, np.int32)
@@ -338,13 +341,52 @@ class World:
         return r.render().copy(), info
 
     def dashboard_frame(self, drone: str, frame: np.ndarray) -> np.ndarray:
-        """The copy of a drone frame shown on the dashboard: smoke fog by depth, like the firefighter view
-        (fog.UI_FOG_DENSITY, 0 = off). Call right after render_drone (same pose). Perception always gets
-        the clean frame."""
-        if fog.UI_FOG_DENSITY <= 0:
+        """The copy of a drone frame shown on the dashboard: the firefighter figure (Act 2) and smoke fog by
+        depth, like the firefighter view (fog.UI_FOG_DENSITY, 0 = off). Call right after render_drone (same
+        pose). Perception always gets the clean frame: no firefighter (its hi-vis stripes would read as a
+        survivor), no fog."""
+        show_ff = self._ff_figure_in_view(drone)
+        if fog.UI_FOG_DENSITY <= 0 and not show_ff:
             return frame
         depth = self.render_depth(drone)
-        return frame if depth is None else fog.apply_fog(frame, depth, fog.UI_FOG_DENSITY)
+        if depth is None:
+            return frame
+        if show_ff:
+            frame, depth = self._overlay_ff(drone, frame, depth)
+        return fog.apply_fog(frame, depth, fog.UI_FOG_DENSITY) if fog.UI_FOG_DENSITY > 0 else frame
+
+    def _ff_figure_in_view(self, drone: str) -> bool:
+        """Draw the firefighter figure? Only once it is being steered (Act 2: ff_input since the last load),
+        if the model exists, and it is within 20 m in front of this camera."""
+        if not self._ff_active or not self._ff_figure or drone in self._dead:
+            return False
+        cid = self._d[drone]["cam"]
+        f = self.ff_pose()
+        c = self.data.cam_xmat[cid].reshape(3, 3).T @ (np.array([f.x, f.y, 0.9]) - self.data.cam_xpos[cid])
+        return -c[2] > 0.1 and float(np.linalg.norm(c)) < 20.0  # camera looks down -z
+
+    def _overlay_ff(self, drone: str, frame: np.ndarray, depth: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Render only the firefighter figure (its own group) and paste it where it is nearer than the scene."""
+        r = self._renderer
+        if self._ff_opt is None:
+            self._ff_opt = mujoco.MjvOption()
+            self._ff_opt.geomgroup[:] = 0
+            self._ff_opt.geomgroup[shapes.FF_FIGURE_GROUP] = 1
+        r.update_scene(self.data, camera=self._d[drone]["cam"], scene_option=self._ff_opt)
+        r.scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = 0
+        r.scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 0
+        rgb = r.render()
+        r.enable_depth_rendering()
+        try:
+            ff_depth = r.render().copy()
+        finally:
+            r.disable_depth_rendering()
+        near = ff_depth < np.minimum(depth, PIXEL_RAY_MAX)  # figure pixels in front of walls / everything else
+        if not near.any():
+            return frame, depth
+        out = frame.copy()
+        out[near] = rgb[near]
+        return out, np.where(near, ff_depth, depth)
 
     def render_depth(self, drone: str) -> np.ndarray | None:
         """Depth in metres for the same view as render_drone (call it right after). For UI effects (the
@@ -464,6 +506,7 @@ class World:
     def set_ff_input(self, fwd: float, strafe: float, yaw: float) -> None:
         """fwd/strafe in [-1, 1] (x 1.4 m/s, strafe + = right). yaw = absolute target heading (rad)."""
         self._ff_cmd = (float(np.clip(fwd, -1, 1)), float(np.clip(strafe, -1, 1)), float(yaw))
+        self._ff_active = True  # being steered (Act 2): the dashboard feeds show the firefighter figure
 
     def ff_pose(self) -> Pose:
         q, a = self.data.qpos, self._ff["q"]
@@ -525,6 +568,7 @@ class World:
         self._next_id = rt["next_id"]
         self._cmd = {k: np.array(v) for k, v in rt["cmd"].items()}
         self._ff_cmd = tuple(rt["ff_cmd"])
+        self._ff_active = False  # a fresh act: the figure shows again once the firefighter is steered
         self._dead = set(rt["dead"])
         self._rng.bit_generator.state = rt["rng"]
         self.model.geom_rgba[:] = self._orig_rgba

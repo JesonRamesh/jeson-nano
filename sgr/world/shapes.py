@@ -92,25 +92,40 @@ DRONE_MODEL_SCALE = 1.25
 _DRONE_EMISSION_MATS = {0.6: "mat_dm_e60", 1.0: "mat_dm_e100"}
 
 
+# W's firefighter figure (the 3D view's FirefighterFigure, scale 1). Drawn on the dashboard copy of the drone
+# frames only (group FF_FIGURE_GROUP, never in the perception render): its hi-vis stripes are in the detector's
+# "person" range and the yellow helmet in its "fire" range, so the firefighter must not reach perception.
+FF_MODEL = DRONE_MODEL.with_name("firefighter.glb")
+FF_FIGURE_GROUP = 5
+
+
 @functools.lru_cache(maxsize=1)
 def drone_model_parts() -> tuple:
-    """((part, vertices z-up m, faces, rgba, emission, material_name), ...) from drone.glb; () if unavailable.
+    """((part, vertices z-up m, faces, rgba, emission, material_name), ...) from drone.glb; () if unavailable."""
+    return _glb_parts(DRONE_MODEL, DRONE_MODEL_SCALE)
 
-    glTF is y-up with +x forward; the sim is z-up: (x, y, z) -> (x, -z, y), the same +90 deg X turn the
-    3D view applies.
-    """
-    if not DRONE_MODEL.is_file():
+
+@functools.lru_cache(maxsize=1)
+def ff_model_parts() -> tuple:
+    """Same, from firefighter.glb (feet at z = 0, facing +x)."""
+    return _glb_parts(FF_MODEL, 1.0)
+
+
+def _glb_parts(path: Path, scale: float) -> tuple:
+    """glTF is y-up with +x forward; the sim is z-up: (x, y, z) -> (x, -z, y), the same +90 deg X turn the
+    3D view applies."""
+    if not path.is_file():
         return ()
     try:
         import trimesh
 
-        scene = trimesh.load(DRONE_MODEL)
+        scene = trimesh.load(path)
         parts = []
         for node in sorted(scene.graph.nodes_geometry):
             T, gname = scene.graph[node]
             g = scene.geometry[gname]
             v = trimesh.transformations.transform_points(np.asarray(g.vertices, float), T)
-            v = np.stack([v[:, 0], -v[:, 2], v[:, 1]], axis=1) * DRONE_MODEL_SCALE
+            v = np.stack([v[:, 0], -v[:, 2], v[:, 1]], axis=1) * scale
             mat = g.visual.material
             col = np.asarray(getattr(mat, "baseColorFactor", (128, 128, 128, 255)), float)
             col = col / 255.0 if col.max() > 1.0 else col
@@ -138,6 +153,25 @@ def _drone_mesh_assets() -> list[str]:
     return out
 
 
+def _ff_mesh_assets() -> list[str]:
+    out = []
+    for node, v, f, *_ in ff_model_parts():
+        vs = " ".join(f"{x:.4f}" for x in v.ravel())
+        fs = " ".join(str(i) for i in f.ravel())
+        out.append(f'<mesh name="ff_{node}" vertex="{vs}" face="{fs}" inertia="shell"/>')
+    return out
+
+
+def ff_model_geoms(name: str) -> str:
+    """The firefighter figure (visual only, no mass, group FF_FIGURE_GROUP: dashboard frames only)."""
+    out = []
+    for node, _v, _f, col, emission, _mat in ff_model_parts():
+        material = _DRONE_EMISSION_MATS.get(emission, "mat_matte")
+        out.append(f'<geom name="{name}_m_{node}" type="mesh" mesh="ff_{node}" rgba="{rgba(col)}" material="{material}" '
+                   f'group="{FF_FIGURE_GROUP}" contype="0" conaffinity="0" mass="0"/>')
+    return chr(10).join(out)
+
+
 def drone_model_geoms(name: str, colour) -> str:
     """Geoms of one drone from the shared model (visual only, group 2). The accent part gets `colour`."""
     out = []
@@ -156,6 +190,7 @@ def assets() -> str:
     out.append('<material name="mat_fire_hot" emission="1" specular="0" shininess="0"/>')  # flame particles
     out.append('<material name="mat_matte" specular="0" shininess="0" reflectance="0"/>')
     out.extend(_drone_mesh_assets())
+    out.extend(_ff_mesh_assets())
     out.extend(_rubble_mesh_assets())
     out.append(f'<material name="mat_decoy" emission="{DECOY_EMISSION}" specular="0" shininess="0" reflectance="0"/>')
     return "\n".join(out)
